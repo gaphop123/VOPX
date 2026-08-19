@@ -1784,7 +1784,9 @@ print("Factorial of 5 is: " .. factorial(5))
                     // Multi-return helpers
                     CALL_MR: 40, RET_MR: 41,
                     // Coroutines (thin wrappers over coroutine library)
-                    CO_CREATE: 42, CO_RESUME: 43, CO_YIELD: 44, CO_STATUS: 45
+                    CO_CREATE: 42, CO_RESUME: 43, CO_YIELD: 44, CO_STATUS: 45,
+                    // Roblox-safe method call: obj, name, args... → obj[name](obj, ...)
+                    CALL_METHOD: 46
                 };
                 // Label name → instruction index (for goto)
                 this.labels = new Map();
@@ -2033,16 +2035,13 @@ print("Factorial of 5 is: " .. factorial(5))
             }
 
             visit_CallExpression(node) {
-                // Push function
                 if (node.method) {
-                    // obj:method(args) → push obj, get method, push obj as self, then args
+                    // obj:method(args) → CALL_METHOD (lookup at call time, Roblox-safe)
+                    // stack: obj, name, arg1..argN
                     this.visit(node.base.base);
                     this.emit(this.OP.PUSH_CONST, this.addConstant(node.base.identifier));
-                    this.emit(this.OP.GET_TABLE);
-                    // self
-                    this.visit(node.base.base);
                     node.arguments.forEach(a => this.visit(a));
-                    this.emit(this.OP.CALL, node.arguments.length + 1);
+                    this.emit(this.OP.CALL_METHOD, node.arguments.length);
                 } else {
                     this.visit(node.base);
                     node.arguments.forEach(a => this.visit(a));
@@ -2101,10 +2100,9 @@ print("Factorial of 5 is: " .. factorial(5))
                 if (node.method) {
                     this.visit(node.base.base);
                     this.emit(this.OP.PUSH_CONST, this.addConstant(node.base.identifier));
-                    this.emit(this.OP.GET_TABLE);
-                    this.visit(node.base.base);
                     node.arguments.forEach(a => this.visit(a));
-                    this.emit(this.OP.CALL, (node.arguments.length + 1) + nRets * 1000);
+                    // encode nRets in high digits, nargs in low
+                    this.emit(this.OP.CALL_METHOD, node.arguments.length + nRets * 1000);
                 } else {
                     this.visit(node.base);
                     node.arguments.forEach(a => this.visit(a));
@@ -2805,7 +2803,10 @@ print("Factorial of 5 is: " .. factorial(5))
                     case 'SET_TABLE':
                         return `local v=table.remove(${S}) local k=table.remove(${S}) local t=${S}[#${S}] if t then t[k]=v end`;
                     case 'CALL':
-                        return `local raw=${A} local nRets=0 local n=raw if raw>=1000 then nRets=math.floor(raw/1000) n=raw%1000 end local args={} for i=1,n do args[n-i+1]=table.remove(${S}) end local fn=table.remove(${S}) if type(fn)~="function" then local mt=type(fn)=="table" and getmetatable(fn) if not(mt and mt.__call) then error("VM CALL: attempt to call a "..type(fn).." value (nargs="..tostring(n)..", stack="..tostring(#${S})..")", 0) end end if nRets>0 then local rets={fn(_unpack(args))} for i=1,nRets do ${S}[#${S}+1]=rets[i] end else local r=fn(_unpack(args)) ${S}[#${S}+1]=r end`;
+                        return `local raw=${A} local nRets=0 local n=raw if raw>=1000 then nRets=math.floor(raw/1000) n=raw%1000 end local args={} for i=1,n do args[n-i+1]=table.remove(${S}) end local fn=table.remove(${S}) local ft=type(fn) if ft~="function" then local mt if ft=="table" or ft=="userdata" then local ok,res=pcall(getmetatable,fn) if ok then mt=res end end if not(mt and mt.__call) then local tn=(typeof and typeof(fn)) or ft error("VM CALL: attempt to call a "..tostring(tn).." value (nargs="..tostring(n)..")",0) end end if nRets>0 then local rets={fn(_unpack(args))} for i=1,nRets do ${S}[#${S}+1]=rets[i] end else local r=fn(_unpack(args)) ${S}[#${S}+1]=r end`;
+                    case 'CALL_METHOD':
+                        // stack: obj, name, arg1..argN  →  obj[name](obj, arg1..argN)
+                        return `local raw=${A} local nRets=0 local n=raw if raw>=1000 then nRets=math.floor(raw/1000) n=raw%1000 end local args={} for i=1,n do args[n-i+1]=table.remove(${S}) end local name=table.remove(${S}) local obj=table.remove(${S}) if obj==nil then error("VM CALL_METHOD: nil object for :"..tostring(name),0) end local fn=obj[name] if type(fn)~="function" then local tn=(typeof and typeof(fn)) or type(fn) error("VM CALL_METHOD: :"..tostring(name).." is "..tostring(tn).." (not function)",0) end if nRets>0 then local rets={fn(obj,_unpack(args))} for i=1,nRets do ${S}[#${S}+1]=rets[i] end else ${S}[#${S}+1]=fn(obj,_unpack(args)) end`;
                     case 'RET':
                         return `${IP} = #bc + 2`;
                     case 'RET_MR':
