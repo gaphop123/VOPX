@@ -2400,13 +2400,13 @@ print("Factorial of 5 is: " .. factorial(5))
                 };
             }
 
-            // Encode a string as a sequence of byte values that can be rebuilt with string.char
+            // Encode a string as UTF-8 bytes, XOR each byte (always 0-255 for string.char)
             encodeStringBytes(str, key) {
                 const bytes = [];
-                for (let i = 0; i < str.length; i++) {
-                    // Use codePointAt to be Unicode-safe; for simplicity we stay in BMP
-                    const code = str.charCodeAt(i);
-                    bytes.push(code ^ key);
+                // UTF-8 encode so every value is a single byte 0-255
+                const utf8 = unescape(encodeURIComponent(str));
+                for (let i = 0; i < utf8.length; i++) {
+                    bytes.push((utf8.charCodeAt(i) & 0xFF) ^ (key & 0xFF));
                 }
                 return bytes;
             }
@@ -2512,7 +2512,7 @@ print("Factorial of 5 is: " .. factorial(5))
                     src += `    elseif t == 3 then\n`;
                     src += `      local b = _raw[i]\n`;
                     src += `      local s = ""\n`;
-                    src += `      for j = 1, #b do local c=b[j] if bit32 then c=bit32.bxor(c,_k) else local x,y,r,p=c,_k,0,1 for _=1,8 do if x%2~=y%2 then r=r+p end x=math.floor(x/2) y=math.floor(y/2) p=p*2 end c=r end s=s..string.char(c) end\n`;
+                    src += `      for j = 1, #b do local c=b[j] if type(c)~="number" then c=0 end if bit32 then c=bit32.bxor(math.floor(c),_k) else local x,y,r,p=math.floor(c),_k,0,1 for _=1,8 do if x%2~=y%2 then r=r+p end x=math.floor(x/2) y=math.floor(y/2) p=p*2 end c=r end c=math.floor(c)%256 if c<0 then c=c+256 end s=s..string.char(c) end\n`;
                     src += `      ${this.varNames.consts}[i] = s\n`;
                     src += `    end\n`;
                     src += `  end\n`;
@@ -2857,8 +2857,10 @@ print("Factorial of 5 is: " .. factorial(5))
 
                 const encryptStr = (s) => {
                     const bytes = [];
-                    for (let i = 0; i < s.length; i++) {
-                        let c = s.charCodeAt(i);
+                    // UTF-8 so every unit is a real byte 0-255 (string.char safe)
+                    const utf8 = unescape(encodeURIComponent(s));
+                    for (let i = 0; i < utf8.length; i++) {
+                        let c = utf8.charCodeAt(i) & 0xFF;
                         c = (c ^ key1) & 0xFF;
                         c = (c + key2) & 0xFF;
                         bytes.push(c);
@@ -2930,9 +2932,13 @@ print("Factorial of 5 is: " .. factorial(5))
                     pre += `    local s = table.create and table.create(#b) or {}\n`;
                     pre += `    for j = 1, #b do\n`;
                     pre += `      local c = b[j]\n`;
-                    pre += `      c = (c - _k2) % 256\n`;
+                    pre += `      if type(c) ~= "number" then c = 0 end\n`;
+                    pre += `      c = math.floor(c) - _k2\n`;
+                    pre += `      c = c % 256\n`;
                     pre += `      if c < 0 then c = c + 256 end\n`;
-                    pre += `      c = bit32 and bit32.bxor(c, _k1) or (function(x,y) local r,p=0,1 for _=1,8 do if x%2~=y%2 then r=r+p end x=math.floor(x/2) y=math.floor(y/2) p=p*2 end return r end)(c, _k1)\n`;
+                    pre += `      if bit32 then c = bit32.bxor(c, _k1) else local x,y,r,p=c,_k1,0,1 for _=1,8 do if x%2~=y%2 then r=r+p end x=math.floor(x/2) y=math.floor(y/2) p=p*2 end c=r end\n`;
+                    pre += `      c = math.floor(c) % 256\n`;
+                    pre += `      if c < 0 then c = c + 256 end\n`;
                     pre += `      s[j] = string.char(c)\n`;
                     pre += `    end\n`;
                     pre += `    s = table.concat(s)\n`;
