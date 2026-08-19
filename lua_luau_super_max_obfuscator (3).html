@@ -1,0 +1,2986 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Lua/Luau VM Obfuscator by Gaphop</title>
+    
+    <!-- Suppress benign ResizeObserver errors often triggered by Monaco Editor -->
+    <script>
+        if (typeof window !== 'undefined' && window.ResizeObserver) {
+            const OriginalResizeObserver = window.ResizeObserver;
+            window.ResizeObserver = class ResizeObserver extends OriginalResizeObserver {
+                constructor(callback) {
+                    super((entries, observer) => {
+                        window.requestAnimationFrame(() => {
+                            try {
+                                callback(entries, observer);
+                            } catch (e) {
+                                console.error(e);
+                            }
+                        });
+                    });
+                }
+            };
+        }
+        
+        window.addEventListener('error', function(e) {
+            if (e.message && e.message.includes('ResizeObserver')) {
+                e.stopImmediatePropagation();
+                e.preventDefault();
+            }
+        });
+    </script>
+
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600;700&family=Fira+Code:wght@400;600&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    
+    <!-- Monaco Editor Loader -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/require.js/2.3.6/require.min.js"></script>
+
+    <style>
+        :root {
+            --bg-base: #0f111a;
+            --bg-panel: #1a1d27;
+            --bg-input: #232736;
+            --accent: #6366f1;
+            --accent-hover: #4f46e5;
+            --text-main: #e2e8f0;
+            --text-muted: #94a3b8;
+            --border: #334155;
+            --success: #10b981;
+            --error: #ef4444;
+            --warning: #f59e0b;
+        }
+
+        body {
+            font-family: 'Inter', sans-serif;
+            background-color: var(--bg-base);
+            color: var(--text-main);
+            margin: 0;
+            height: 100vh;
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
+        }
+
+        .code-font {
+            font-family: 'Fira Code', monospace;
+        }
+
+        /* Custom Scrollbar */
+        ::-webkit-scrollbar { width: 8px; height: 8px; }
+        ::-webkit-scrollbar-track { background: var(--bg-base); }
+        ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 4px; }
+        ::-webkit-scrollbar-thumb:hover { background: var(--text-muted); }
+
+        .panel {
+            background-color: var(--bg-panel);
+            border: 1px solid var(--border);
+            border-radius: 0.5rem;
+            display: flex;
+            flex-direction: column;
+        }
+
+        .btn {
+            transition: all 0.2s ease;
+        }
+        
+        .btn:active { transform: scale(0.95); }
+
+        .checkbox-custom {
+            accent-color: var(--accent);
+            width: 1.25rem;
+            height: 1.25rem;
+        }
+
+        .monaco-container {
+            flex-grow: 1;
+            min-height: 0;
+            position: relative;
+        }
+
+        #loader {
+            display: none;
+            position: absolute;
+            inset: 0;
+            background: rgba(15, 17, 26, 0.8);
+            z-index: 50;
+            align-items: center;
+            justify-content: center;
+            flex-direction: column;
+            backdrop-filter: blur(4px);
+        }
+
+        .spinner {
+            width: 50px;
+            height: 50px;
+            border: 5px solid var(--border);
+            border-top-color: var(--accent);
+            border-radius: 50%;
+            animation: spin 1s linear infinite;
+        }
+
+        @keyframes spin { 100% { transform: rotate(360deg); } }
+
+        /* Toast Notifications */
+        #toast-container {
+            position: fixed;
+            bottom: 20px;
+            right: 20px;
+            z-index: 100;
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+        }
+
+        .toast {
+            padding: 1rem;
+            border-radius: 0.5rem;
+            background: var(--bg-panel);
+            border-left: 4px solid var(--accent);
+            box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.5);
+            animation: slideIn 0.3s ease forwards;
+            opacity: 0;
+            transform: translateX(100%);
+            color: white;
+            min-width: 300px;
+        }
+
+        @keyframes slideIn {
+            to { opacity: 1; transform: translateX(0); }
+        }
+
+        .toast.error { border-left-color: var(--error); }
+        .toast.success { border-left-color: var(--success); }
+    </style>
+</head>
+<body>
+
+    <!-- Header -->
+    <header class="bg-[#1a1d27] border-b border-[#334155] p-4 flex justify-between items-center z-10 shrink-0">
+        <div class="flex items-center gap-3">
+            <i class="fa-solid fa-shield-halved text-indigo-500 text-2xl"></i>
+            <div>
+                <h1 class="text-xl font-bold text-white tracking-tight">VORTEX <span class="text-indigo-400">Opx</span></h1>
+                <p class="text-xs text-slate-400">Lua/Luau Super-Max VM Obfuscator</p>
+            </div>
+        </div>
+        <div class="flex gap-2 items-center">
+            <div class="text-xs font-mono text-slate-400 mr-4 bg-slate-800 px-3 py-1 rounded-md border border-slate-700 flex items-center gap-2">
+                <i class="fa-solid fa-fingerprint"></i> Seed: <span id="ui-seed-display" class="text-indigo-300">Not Generated</span>
+            </div>
+            <button onclick="UI.generateSeed()" class="btn px-4 py-2 bg-slate-700 hover:bg-slate-600 text-white text-sm font-semibold rounded-md border border-slate-600">
+                <i class="fa-solid fa-dice mr-1"></i> New Seed
+            </button>
+            <button onclick="UI.runTests()" class="btn px-4 py-2 bg-emerald-700 hover:bg-emerald-600 text-white text-sm font-semibold rounded-md border border-emerald-500" title="Run internal test suite">
+                <i class="fa-solid fa-vial mr-1"></i> Test
+            </button>
+            <button onclick="UI.obfuscate()" class="btn px-6 py-2 bg-indigo-600 hover:bg-indigo-500 text-white text-sm font-semibold rounded-md shadow-[0_0_15px_rgba(99,102,241,0.4)] border border-indigo-400">
+                <i class="fa-solid fa-bolt mr-1"></i> Obfuscate
+            </button>
+        </div>
+    </header>
+
+    <!-- Main Content -->
+    <main class="flex-grow flex p-4 gap-4 overflow-hidden">
+        
+        <!-- Left: Input Editor -->
+        <section class="panel w-1/3 flex flex-col relative">
+            <div class="p-3 border-b border-[#334155] flex justify-between items-center shrink-0">
+                <h2 class="text-sm font-semibold flex items-center gap-2 text-slate-200">
+                    <i class="fa-solid fa-code text-slate-400"></i> Source.lua
+                </h2>
+                <button onclick="UI.clearInput()" class="text-slate-400 hover:text-red-400 transition-colors text-xs" title="Clear Input">
+                    <i class="fa-solid fa-trash"></i>
+                </button>
+            </div>
+            <div id="editor-input" class="monaco-container"></div>
+            <!-- Overlay loader for left side -->
+            <div id="loader" class="absolute inset-0 flex flex-col items-center justify-center bg-[#0f111a]/80 backdrop-blur-sm z-50 rounded-b-lg hidden">
+                <div class="spinner mb-4"></div>
+                <p id="loader-text" class="text-indigo-400 font-mono text-sm animate-pulse">Compiling AST...</p>
+            </div>
+        </section>
+
+        <!-- Center: Settings -->
+        <section class="panel w-1/3 flex flex-col overflow-y-auto">
+            <div class="p-4 border-b border-[#334155] bg-[#1e2230] sticky top-0 z-10">
+                <h2 class="text-sm font-semibold mb-3 text-slate-200"><i class="fa-solid fa-sliders text-slate-400 mr-2"></i> Protection Profile</h2>
+                <div class="flex flex-col gap-2">
+                    <label class="text-xs text-slate-400">Preset configuration:</label>
+                    <select id="preset-selector" onchange="UI.loadPreset(this.value)" class="w-full bg-[#0f111a] border border-[#334155] text-white text-sm rounded focus:ring-indigo-500 focus:border-indigo-500 block p-2.5 outline-none">
+                        <option value="safe">Safe — string encrypt, always runs</option>
+                        <option value="strong" selected>Strong — recommended (full Roblox)</option>
+                        <option value="slow">Slow — heavy multi-pass (max protection)</option>
+                        <option value="extreme">Extreme — VM + encryption</option>
+                        <option value="supermax">Super-Max — full VM + mutation</option>
+                        <option value="custom">Custom</option>
+                    </select>
+                    <p class="text-[10px] text-slate-500 mt-2 font-mono">Supports up to ~5000 lines. Auto-VM when &gt;500 lines.</p>
+                    <label class="flex items-center gap-2 cursor-pointer mt-2">
+                        <input type="checkbox" id="opt-auto-vm" class="checkbox-custom" checked>
+                        <span class="text-xs text-slate-400">Auto-enable VM if source &gt; 500 lines</span>
+                    </label>
+                </div>
+            </div>
+
+            <div class="p-4 flex flex-col gap-5 flex-grow" id="settings-form">
+                <!-- Group 1 -->
+                <div>
+                    <h3 class="text-xs font-bold text-indigo-400 uppercase tracking-wider mb-3">Lexical Protection</h3>
+                    <div class="space-y-3">
+                        <label class="flex items-center gap-3 cursor-pointer group">
+                            <input type="checkbox" id="opt-rename" class="checkbox-custom" checked>
+                            <span class="text-sm text-slate-300 group-hover:text-white transition-colors">Rename Identifiers (Randomized)</span>
+                        </label>
+                        <label class="flex items-center gap-3 cursor-pointer group">
+                            <input type="checkbox" id="opt-strings" class="checkbox-custom" checked>
+                            <span class="text-sm text-slate-300 group-hover:text-white transition-colors">String Encryption (Multi-stage)</span>
+                        </label>
+                        <label class="flex items-center gap-3 cursor-pointer group">
+                            <input type="checkbox" id="opt-numbers" class="checkbox-custom" checked>
+                            <span class="text-sm text-slate-300 group-hover:text-white transition-colors">Number Obfuscation (Math expressions)</span>
+                        </label>
+                    </div>
+                </div>
+
+                <!-- Group 2 -->
+                <div>
+                    <h3 class="text-xs font-bold text-indigo-400 uppercase tracking-wider mb-3">Control Flow</h3>
+                    <div class="space-y-3">
+                        <label class="flex items-center gap-3 cursor-pointer group">
+                            <input type="checkbox" id="opt-cff" class="checkbox-custom" checked>
+                            <span class="text-sm text-slate-300 group-hover:text-white transition-colors">Control-Flow Flattening</span>
+                        </label>
+                        <label class="flex items-center gap-3 cursor-pointer group">
+                            <input type="checkbox" id="opt-opaque" class="checkbox-custom" checked>
+                            <span class="text-sm text-slate-300 group-hover:text-white transition-colors">Opaque Predicates Injection</span>
+                        </label>
+                        <label class="flex items-center gap-3 cursor-pointer group">
+                            <input type="checkbox" id="opt-deadcode" class="checkbox-custom" checked>
+                            <span class="text-sm text-slate-300 group-hover:text-white transition-colors">Dead Code Generation (Junk)</span>
+                        </label>
+                    </div>
+                </div>
+
+                <!-- Group 3 -->
+                <div class="border-t border-[#334155] pt-4">
+                    <h3 class="text-xs font-bold text-rose-400 uppercase tracking-wider mb-3 flex items-center gap-2">
+                        <i class="fa-solid fa-microchip"></i> VM Generation (Core)
+                    </h3>
+                    
+                    <div class="mb-4">
+                        <label class="text-xs text-slate-400 mb-1 block">VM Mode:</label>
+                        <select id="opt-vmmode" class="w-full bg-[#0f111a] border border-[#334155] text-white text-sm rounded p-2 outline-none">
+                            <option value="none">Disabled (Source Transform Only)</option>
+                            <option value="safe">Safe VM (Lightweight Stack)</option>
+                            <option value="strong">Strong VM (Encrypted Opcodes)</option>
+                            <option value="supermax" selected>Super-Max VM (Full Virtualization)</option>
+                        </select>
+                    </div>
+
+                    <div class="space-y-3 pl-2 border-l-2 border-[#334155]">
+                        <label class="flex items-center gap-3 cursor-pointer group">
+                            <input type="checkbox" id="opt-vm-constants" class="checkbox-custom" checked>
+                            <span class="text-sm text-slate-300">Encrypted Constant Pool</span>
+                        </label>
+                        <label class="flex items-center gap-3 cursor-pointer group">
+                            <input type="checkbox" id="opt-vm-mutation" class="checkbox-custom" checked>
+                            <span class="text-sm text-slate-300">Opcode Mutation (Randomized Mappings)</span>
+                        </label>
+                        <label class="flex items-center gap-3 cursor-pointer group">
+                            <input type="checkbox" id="opt-vm-shuffle" class="checkbox-custom" checked>
+                            <span class="text-sm text-slate-300">Handler Shuffling</span>
+                        </label>
+                         <label class="flex items-center gap-3 cursor-pointer group">
+                            <input type="checkbox" id="opt-vm-dispatcher" class="checkbox-custom" checked>
+                            <span class="text-sm text-slate-300">Dispatcher Obfuscation</span>
+                        </label>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <!-- Right: Output Editor -->
+        <section class="panel w-1/3 flex flex-col relative">
+            <div class="p-3 border-b border-[#334155] flex justify-between items-center shrink-0 bg-[#1e2230]">
+                <h2 class="text-sm font-semibold flex items-center gap-2 text-indigo-400">
+                    <i class="fa-solid fa-file-shield"></i> Obfuscated.lua
+                </h2>
+                <div class="flex gap-2">
+                    <button onclick="UI.copyOutput()" class="text-slate-400 hover:text-white transition-colors text-xs bg-slate-800 px-2 py-1 rounded border border-slate-600" title="Copy to Clipboard">
+                        <i class="fa-regular fa-copy mr-1"></i> Copy
+                    </button>
+                    <button onclick="UI.downloadOutput()" class="text-slate-400 hover:text-white transition-colors text-xs bg-slate-800 px-2 py-1 rounded border border-slate-600" title="Download .lua">
+                        <i class="fa-solid fa-download mr-1"></i> Save
+                    </button>
+                </div>
+            </div>
+            <div id="editor-output" class="monaco-container"></div>
+            
+            <!-- Stats Bar -->
+            <div class="bg-[#1a1d27] border-t border-[#334155] p-2 flex flex-wrap gap-x-4 gap-y-1 text-[10px] text-slate-400 font-mono shrink-0">
+                <div>Time: <span id="stat-time" class="text-white">0ms</span></div>
+                <div>Size: <span id="stat-size-in" class="text-slate-300">0B</span> &rarr; <span id="stat-size-out" class="text-indigo-300">0B</span></div>
+                <div>Ratio: <span id="stat-ratio" class="text-white">0x</span></div>
+                <div>VM Instr: <span id="stat-instr" class="text-emerald-400">0</span></div>
+                <div>AST Nodes: <span id="stat-ast" class="text-amber-400">0</span></div>
+            </div>
+        </section>
+
+    </main>
+
+    <div id="toast-container"></div>
+
+    <script>
+        /**
+         * ========================================================================
+         * VORTEX Opx — Lua 5.1 / Luau VM Obfuscator
+         * ========================================================================
+         * Architecture (pipeline stages):
+         *   1. Lexer          — tokens (numbers, strings, long strings, comments)
+         *   2. Parser         — AST (precedence, functions, tables, loops)
+         *   3. Encoder/Compiler — AST → IR instructions + constant pool + protos
+         *   4. Validator      — opcode/operand/jump/constant integrity
+         *   5. VMBuilder      — emit runtime (dispatcher, handlers, env, decrypt)
+         *   6. SourceObfuscator — non-VM path (string/number encrypt, junk, opaque)
+         *
+         * Protection layers (toggleable):
+         *   VM virtualization, opcode mutation, handler shuffle, constant encrypt,
+         *   string transform, number transform, opaque predicates, dead code
+         *
+         * Supported: locals/globals, functions, recursion, closures (read+write upvalues),
+         *   if/while/repeat/for, break/continue, goto/labels, tables, method calls,
+         *   and/or value semantics, multi-return, Luau types (parsed, runtime-erased),
+         *   coroutines (stdlib + CO_* ops), loadstring+HttpGet, Roblox globals
+         *
+         * Notes:
+         *   - Luau type annotations are accepted in all modes; erased at runtime
+         *   - Multi-return via CALL nRets encoding and RET_MR
+         *   - Upvalue writes use depth-encoded local operands
+         *
+         * Errors: clear messages with stage; never emit knowingly broken bytecode.
+         * Seeds: deterministic Mulberry32 when seed is set.
+         * ========================================================================
+         */
+        const Utils = {
+            mulberry32(a) {
+                return function() {
+                    var t = a += 0x6D2B79F5;
+                    t = Math.imul(t ^ t >>> 15, t | 1);
+                    t ^= t + Math.imul(t ^ t >>> 7, t | 61);
+                    return ((t ^ t >>> 14) >>> 0) / 4294967296;
+                }
+            },
+            rng: Math.random,
+            seed: 0,
+            
+            setSeed(seedStr) {
+                let h = 2166136261 >>> 0;
+                for (let i = 0; i < seedStr.length; i++) {
+                    h = Math.imul(h ^ seedStr.charCodeAt(i), 16777619);
+                }
+                this.seed = h;
+                this.rng = this.mulberry32(this.seed);
+                return h.toString(16).toUpperCase();
+            },
+
+            randInt(min, max) {
+                return Math.floor(this.rng() * (max - min + 1)) + min;
+            },
+
+            randHex(length) {
+                let result = '';
+                const chars = '0123456789ABCDEF';
+                for (let i = 0; i < length; i++) result += chars.charAt(this.randInt(0, chars.length - 1));
+                return result;
+            },
+
+            generateIdentifier() {
+                const prefixes = ['_0x', '_L', '__v_', '_X'];
+                return prefixes[this.randInt(0, prefixes.length - 1)] + this.randHex(this.randInt(4, 8));
+            },
+
+            formatBytes(bytes, decimals = 2) {
+                if (bytes === 0) return '0 Bytes';
+                const k = 1024, dm = decimals < 0 ? 0 : decimals, sizes = ['B', 'KB', 'MB'];
+                const i = Math.floor(Math.log(bytes) / Math.log(k));
+                return parseFloat((bytes / Math.pow(k, i)).toFixed(dm)) + ' ' + sizes[i];
+            },
+
+            toast(msg, type = 'info') {
+                const container = document.getElementById('toast-container');
+                const el = document.createElement('div');
+                el.className = `toast ${type}`;
+                let icon = 'fa-info-circle';
+                if(type==='error') icon = 'fa-circle-xmark';
+                if(type==='success') icon = 'fa-check-circle';
+                
+                el.innerHTML = `<i class="fa-solid ${icon} mr-2"></i> ${msg}`;
+                container.appendChild(el);
+                setTimeout(() => {
+                    el.style.opacity = '0';
+                    el.style.transform = 'translateX(100%)';
+                    setTimeout(() => el.remove(), 300);
+                }, 4000);
+            }
+        };
+
+        const Stats = {
+            astNodes: 0,
+            vmInstr: 0
+        };
+
+        /** Validate IR before code generation — fails fast with clear errors */
+        function validateIR(ir) {
+            if (!ir || !ir.instructions || !ir.constants || !ir.opMap) {
+                throw new Error('[MalformedBytecode] Missing IR fields (stage: validate)');
+            }
+            const n = ir.instructions.length;
+            const nc = ir.constants.length;
+            const opNames = {};
+            Object.keys(ir.opMap).forEach(k => { opNames[ir.opMap[k]] = k; });
+            const jumpOps = new Set([ir.opMap.JMP, ir.opMap.JMPF, ir.opMap.JMPT].filter(x => x !== undefined));
+            const constOps = new Set([ir.opMap.PUSH_CONST, ir.opMap.PUSH_GLOBAL, ir.opMap.STORE_GLOBAL].filter(x => x !== undefined));
+            ir.instructions.forEach((inst, i) => {
+                if (opNames[inst.op] === undefined) {
+                    throw new Error(`[InvalidOpcode] op=${inst.op} at instr ${i} (stage: validate)`);
+                }
+                if (constOps.has(inst.op) && (inst.arg < 0 || inst.arg >= nc)) {
+                    throw new Error(`[InvalidConstantIndex] arg=${inst.arg} at instr ${i}, pool size ${nc} (stage: validate)`);
+                }
+                if (jumpOps.has(inst.op) && (inst.arg < 0 || inst.arg > n)) {
+                    throw new Error(`[InvalidJumpTarget] target=${inst.arg} at instr ${i}, size ${n} (stage: validate)`);
+                }
+                if (inst.op === ir.opMap.CLOSURE && ir.functions && (inst.arg < 0 || inst.arg >= ir.functions.length)) {
+                    throw new Error(`[InvalidOperand] closure index ${inst.arg} (stage: validate)`);
+                }
+            });
+            return true;
+        }
+
+        const UI = {
+            editorInput: null,
+            editorOutput: null,
+            
+            initMonaco() {
+                require.config({ paths: { 'vs': 'https://cdnjs.cloudflare.com/ajax/libs/monaco-editor/0.38.0/min/vs' }});
+                require(['vs/editor/editor.main'], function() {
+                    monaco.editor.defineTheme('vortex-dark', {
+                        base: 'vs-dark',
+                        inherit: true,
+                        rules: [
+                            { background: '151722' },
+                            { token: 'keyword', foreground: 'c678dd' },
+                            { token: 'string', foreground: '98c379' },
+                            { token: 'number', foreground: 'd19a66' },
+                            { token: 'comment', foreground: '5c6370', fontStyle: 'italic' }
+                        ],
+                        colors: {
+                            'editor.background': '#151722',
+                            'editor.lineHighlightBackground': '#1e2230',
+                            'editorLineNumber.foreground': '#4b5563'
+                        }
+                    });
+
+                    UI.editorInput = monaco.editor.create(document.getElementById('editor-input'), {
+                        value: `-- Example: local script
+local function factorial(n)
+    if n == 0 then return 1 end
+    return n * factorial(n - 1)
+end
+print("Factorial of 5 is: " .. factorial(5))
+
+-- Example: loadstring + HttpGet (executor environments)
+-- loadstring(game:HttpGet("https://raw.githubusercontent.com/gaphop123/GaphopUI/refs/heads/main/main.lua"))()
+`,
+                        language: 'lua',
+                        theme: 'vortex-dark',
+                        minimap: { enabled: false },
+                        automaticLayout: true,
+                        fontFamily: "'Fira Code', monospace",
+                        fontSize: 13,
+                        padding: { top: 16 }
+                    });
+
+                    UI.editorOutput = monaco.editor.create(document.getElementById('editor-output'), {
+                        value: `-- Obfuscated output will appear here.`,
+                        language: 'lua',
+                        theme: 'vortex-dark',
+                        readOnly: true,
+                        minimap: { enabled: false },
+                        automaticLayout: true,
+                        fontFamily: "'Fira Code', monospace",
+                        fontSize: 13,
+                        wordWrap: 'on',
+                        padding: { top: 16 }
+                    });
+                });
+            },
+
+            generateSeed() {
+                const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
+                let seed = '';
+                for (let i = 0; i < 16; i++) seed += chars.charAt(Math.floor(Math.random() * chars.length));
+                const hexId = Utils.setSeed(seed);
+                document.getElementById('ui-seed-display').innerText = hexId;
+                return hexId;
+            },
+
+            loadPreset(preset) {
+                const set = (id, val) => document.getElementById(id).checked = val;
+                const setVal = (id, val) => document.getElementById(id).value = val;
+
+                switch(preset) {
+                    case 'safe':
+                        set('opt-rename', true); set('opt-strings', true); set('opt-numbers', false);
+                        set('opt-cff', false); set('opt-opaque', false); set('opt-deadcode', false);
+                        setVal('opt-vmmode', 'none');
+                        set('opt-vm-constants', false); set('opt-vm-mutation', false); set('opt-vm-shuffle', false); set('opt-vm-dispatcher', false);
+                        break;
+                    case 'strong':
+                        set('opt-rename', true); set('opt-strings', true); set('opt-numbers', true);
+                        set('opt-cff', true); set('opt-opaque', true); set('opt-deadcode', true);
+                        setVal('opt-vmmode', 'none');
+                        set('opt-vm-constants', false); set('opt-vm-mutation', false); set('opt-vm-shuffle', false); set('opt-vm-dispatcher', false);
+                        break;
+                    case 'extreme':
+                        set('opt-rename', true); set('opt-strings', true); set('opt-numbers', true);
+                        set('opt-cff', true); set('opt-opaque', true); set('opt-deadcode', true);
+                        setVal('opt-vmmode', 'strong');
+                        set('opt-vm-constants', true); set('opt-vm-mutation', true); set('opt-vm-shuffle', false); set('opt-vm-dispatcher', true);
+                        break;
+                    case 'supermax':
+                        set('opt-rename', true); set('opt-strings', true); set('opt-numbers', true);
+                        set('opt-cff', true); set('opt-opaque', true); set('opt-deadcode', true);
+                        setVal('opt-vmmode', 'supermax');
+                        set('opt-vm-constants', true); set('opt-vm-mutation', true); set('opt-vm-shuffle', true); set('opt-vm-dispatcher', true);
+                        break;
+                    case 'slow':
+                        // Heavy multi-pass: max layers, Super-Max VM, all protections
+                        set('opt-rename', true); set('opt-strings', true); set('opt-numbers', true);
+                        set('opt-cff', true); set('opt-opaque', true); set('opt-deadcode', true);
+                        setVal('opt-vmmode', 'supermax');
+                        set('opt-vm-constants', true); set('opt-vm-mutation', true); set('opt-vm-shuffle', true); set('opt-vm-dispatcher', true);
+                        set('opt-auto-vm', true);
+                        break;
+                    case 'custom':
+                        break;
+                }
+            },
+
+            getConfig() {
+                return {
+                    rename: document.getElementById('opt-rename').checked,
+                    strings: document.getElementById('opt-strings').checked,
+                    numbers: document.getElementById('opt-numbers').checked,
+                    cff: document.getElementById('opt-cff').checked,
+                    opaque: document.getElementById('opt-opaque').checked,
+                    deadcode: document.getElementById('opt-deadcode').checked,
+                    vmMode: document.getElementById('opt-vmmode').value,
+                    vmConstants: document.getElementById('opt-vm-constants').checked,
+                    vmMutation: document.getElementById('opt-vm-mutation').checked,
+                    vmShuffle: document.getElementById('opt-vm-shuffle').checked,
+                    vmDispatcher: document.getElementById('opt-vm-dispatcher').checked,
+                    autoVm: document.getElementById('opt-auto-vm') ? document.getElementById('opt-auto-vm').checked : true,
+                    slow: document.getElementById('preset-selector')?.value === 'slow'
+                };
+            },
+
+            clearInput() { if(this.editorInput) this.editorInput.setValue(''); },
+            
+            copyOutput() {
+                if(!this.editorOutput) return;
+                const val = this.editorOutput.getValue();
+                navigator.clipboard.writeText(val).then(() => Utils.toast('Copied to clipboard!', 'success')).catch(e => Utils.toast('Copy failed', 'error'));
+            },
+
+            downloadOutput() {
+                if(!this.editorOutput) return;
+                const blob = new Blob([this.editorOutput.getValue()], {type: "text/plain;charset=utf-8"});
+                const url = URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.href = url;
+                a.download = `protected_${document.getElementById('ui-seed-display').innerText}.lua`;
+                a.click();
+                URL.revokeObjectURL(url);
+            },
+
+            setLoading(active, text = 'Processing...') {
+                const l = document.getElementById('loader');
+                const t = document.getElementById('loader-text');
+                if(active) {
+                    l.style.display = 'flex';
+                    t.innerText = text;
+                } else {
+                    l.style.display = 'none';
+                }
+            },
+
+            async obfuscate() {
+                if(!this.editorInput) return;
+                const source = this.editorInput.getValue();
+                if(source.trim() === '') return Utils.toast('Source is empty', 'warning');
+
+                const lineCount = source.split(/\r\n|\r|\n/).length;
+                const MAX_LINES = 5000;
+                const AUTO_VM_LINES = 500;
+
+                if (lineCount > MAX_LINES) {
+                    return Utils.toast(`Source has ${lineCount} lines (limit ${MAX_LINES}). Split the script or reduce size.`, 'error');
+                }
+
+                const config = this.getConfig();
+
+                // Auto-enable VM when script is large (>500 lines) for stronger output
+                let autoVmApplied = false;
+                if (config.autoVm && lineCount > AUTO_VM_LINES && config.vmMode === 'none') {
+                    config.vmMode = lineCount > 2000 ? 'supermax' : 'strong';
+                    config.vmConstants = true;
+                    config.vmMutation = true;
+                    config.vmShuffle = lineCount > 2000;
+                    config.vmDispatcher = true;
+                    autoVmApplied = true;
+                    document.getElementById('opt-vmmode').value = config.vmMode;
+                    document.getElementById('opt-vm-constants').checked = true;
+                    document.getElementById('opt-vm-mutation').checked = true;
+                    if (lineCount > 2000) document.getElementById('opt-vm-shuffle').checked = true;
+                    document.getElementById('opt-vm-dispatcher').checked = true;
+                }
+
+                const startTime = performance.now();
+                this.setLoading(true, lineCount > AUTO_VM_LINES
+                    ? `Large script (${lineCount} lines) — ${autoVmApplied ? 'Auto-VM ON · ' : ''}processing...`
+                    : 'Initializing Pipeline...');
+                Stats.astNodes = 0;
+                Stats.vmInstr = 0;
+
+                try {
+                    await new Promise(r => setTimeout(r, 20));
+                    if (autoVmApplied) {
+                        Utils.toast(`Auto-VM enabled (${lineCount} lines > ${AUTO_VM_LINES}) → ${config.vmMode}`, 'info');
+                    }
+                    if (config.slow) {
+                        this.setLoading(true, 'Slow mode: multi-pass heavy obfuscation...');
+                        await new Promise(r => setTimeout(r, 30));
+                    }
+                    
+                    this.setLoading(true, 'Lexical Analysis (Tokenizing)...');
+                    const lexer = new LuaLexer(source);
+                    const tokens = lexer.tokenize();
+                    
+                    await new Promise(r => setTimeout(r, 30));
+                    
+                    this.setLoading(true, 'Syntactic Analysis (AST Generation)...');
+                    const parser = new LuaParser(tokens);
+                    const ast = parser.parse();
+                    Stats.astNodes = parser.nodeCount;
+
+                    await new Promise(r => setTimeout(r, 30));
+                    
+                    let finalOutput = "";
+
+                    if (config.vmMode !== 'none') {
+                        this.setLoading(true, 'Compiling to Virtual IR...');
+                        const compiler = new VMCompiler(ast, config);
+                        const ir = compiler.compile();
+                        Stats.vmInstr = ir.instructions.length;
+                        validateIR(ir);
+
+                        await new Promise(r => setTimeout(r, 30));
+
+                        this.setLoading(true, 'Building Virtual Machine...');
+                        const vmBuilder = new VMBuilder(ir, config);
+                        finalOutput = vmBuilder.build();
+                        if (!finalOutput || finalOutput.length < 10) {
+                            throw new Error('[MalformedBytecode] Empty VM output (stage: builder)');
+                        }
+                    } else {
+                        this.setLoading(true, 'Applying Source Transformations...');
+                        const transformer = new ASTTransformer(ast, config, source);
+                        finalOutput = transformer.generate();
+                    }
+
+                    if(finalOutput.length === 0) throw new Error("Output generated was empty.");
+
+                    this.editorOutput.setValue(finalOutput);
+                    
+                    const endTime = performance.now();
+                    const inSize = new Blob([source]).size;
+                    const outSize = new Blob([finalOutput]).size;
+                    
+                    document.getElementById('stat-time').innerText = (endTime - startTime).toFixed(0) + 'ms';
+                    document.getElementById('stat-size-in').innerText = Utils.formatBytes(inSize);
+                    document.getElementById('stat-size-out').innerText = Utils.formatBytes(outSize);
+                    document.getElementById('stat-ratio').innerText = (outSize / (inSize||1)).toFixed(1) + 'x';
+                    document.getElementById('stat-instr').innerText = Stats.vmInstr;
+                    document.getElementById('stat-ast').innerText = Stats.astNodes;
+
+                    Utils.toast('Obfuscation Complete!', 'success');
+
+                } catch (error) {
+                    console.error(error);
+                    Utils.toast(`Obfuscation Error: ${error.message}`, 'error');
+                    this.editorOutput.setValue(`-- Obfuscation Failed.\n-- Error: ${error.message}\n-- Check console for stack trace.`);
+                } finally {
+                    this.setLoading(false);
+                }
+            },
+
+            async runTests() {
+                this.setLoading(true, 'Running internal test suite...');
+                try {
+                    const results = await TestSuite.runAll();
+                    const passed = results.filter(r => r.ok).length;
+                    const failed = results.filter(r => !r.ok);
+                    let msg = `Tests: ${passed}/${results.length} passed`;
+                    if (failed.length) {
+                        console.group('Failed tests');
+                        failed.forEach(f => console.error(f.name, f.error));
+                        console.groupEnd();
+                        msg += ` (${failed.length} failed – see console)`;
+                        Utils.toast(msg, 'error');
+                    } else {
+                        Utils.toast(msg, 'success');
+                    }
+                    this.editorOutput.setValue(
+                        `-- Internal Test Suite Results\n` +
+                        results.map(r => `-- [${r.ok ? 'PASS' : 'FAIL'}] ${r.name}${r.error ? ' :: ' + r.error : ''}`).join('\n')
+                    );
+                } catch (e) {
+                    Utils.toast('Test suite crashed: ' + e.message, 'error');
+                } finally {
+                    this.setLoading(false);
+                }
+            }
+        };
+
+        /* ================================================================
+         *  LEXER – corrected number, string, long string/comment, hex, ..
+         * ================================================================ */
+        class LuaLexer {
+            constructor(input) {
+                this.input = input;
+                this.pos = 0;
+                this.line = 1;
+                this.col = 1;
+                this.tokens = [];
+            }
+
+            tokenize() {
+                while (this.pos < this.input.length) {
+                    let char = this.input[this.pos];
+
+                    if (this.isWhitespace(char)) {
+                        this.consumeWhitespace();
+                        continue;
+                    }
+
+                    // Comments (short or long)
+                    if (char === '-' && this.input[this.pos + 1] === '-') {
+                        this.consumeComment();
+                        continue;
+                    }
+
+                    // Identifiers / keywords
+                    if (this.isAlpha(char) || char === '_') {
+                        this.tokens.push(this.consumeIdentifierOrKeyword());
+                        continue;
+                    }
+
+                    // Numbers (decimal, hex, float)
+                    if (this.isDigit(char) || (char === '.' && this.isDigit(this.input[this.pos + 1]))) {
+                        this.tokens.push(this.consumeNumber());
+                        continue;
+                    }
+
+                    // Short strings
+                    if (char === '"' || char === "'") {
+                        this.tokens.push(this.consumeString(char));
+                        continue;
+                    }
+
+                    // Long strings [[ ... ]] or [=[ ... ]=]
+                    if (char === '[' && (this.input[this.pos + 1] === '[' || this.input[this.pos + 1] === '=')) {
+                        const token = this.consumeLongString();
+                        if (token) {
+                            this.tokens.push(token);
+                            continue;
+                        }
+                    }
+
+                    // Multi-character operators (order matters: check longer first)
+                    const three = this.input.slice(this.pos, this.pos + 3);
+                    if (three === '...') {
+                        this.tokens.push(this.createToken('Varargs', '...'));
+                        this.advance(3);
+                        continue;
+                    }
+                    const two = this.input.slice(this.pos, this.pos + 2);
+                    if (['==', '~=', '<=', '>=', '..', '//', '<<', '>>', '::'].includes(two)) {
+                        this.tokens.push(this.createToken('Operator', two));
+                        this.advance(2);
+                        continue;
+                    }
+
+                    // Single-character symbols
+                    if ("+-*/%^#=<>(){}[];,:.".includes(char)) {
+                        this.tokens.push(this.createToken('Symbol', char));
+                        this.advance(1);
+                        continue;
+                    }
+
+                    throw new Error(`Unexpected character '${char}' at line ${this.line}, col ${this.col}`);
+                }
+                this.tokens.push(this.createToken('EOF', ''));
+                return this.tokens;
+            }
+
+            advance(n = 1) {
+                for (let i = 0; i < n; i++) {
+                    if (this.input[this.pos] === '\n') {
+                        this.line++;
+                        this.col = 1;
+                    } else {
+                        this.col++;
+                    }
+                    this.pos++;
+                }
+            }
+
+            isWhitespace(c) { return c === ' ' || c === '\t' || c === '\n' || c === '\r'; }
+            isAlpha(c) { return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z'); }
+            isDigit(c) { return c >= '0' && c <= '9'; }
+            isHexDigit(c) { return this.isDigit(c) || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F'); }
+            isAlnum(c) { return this.isAlpha(c) || this.isDigit(c) || c === '_'; }
+
+            consumeWhitespace() {
+                while (this.pos < this.input.length && this.isWhitespace(this.input[this.pos])) {
+                    this.advance();
+                }
+            }
+
+            consumeComment() {
+                this.advance(2); // --
+                // Long comment --[=[ ... ]=]
+                if (this.input[this.pos] === '[') {
+                    let levels = 0;
+                    let p = this.pos + 1;
+                    while (p < this.input.length && this.input[p] === '=') {
+                        levels++;
+                        p++;
+                    }
+                    if (p < this.input.length && this.input[p] === '[') {
+                        // genuine long comment
+                        this.advance(1 + levels + 1); // [ =* [
+                        const closing = ']' + '='.repeat(levels) + ']';
+                        while (this.pos < this.input.length &&
+                               this.input.slice(this.pos, this.pos + closing.length) !== closing) {
+                            this.advance();
+                        }
+                        if (this.pos >= this.input.length) {
+                            throw new Error(`Unterminated long comment starting at line ${this.line}`);
+                        }
+                        this.advance(closing.length);
+                        return;
+                    }
+                }
+                // Short comment to end of line
+                while (this.pos < this.input.length && this.input[this.pos] !== '\n') {
+                    this.advance();
+                }
+            }
+
+            consumeIdentifierOrKeyword() {
+                let start = this.pos;
+                while (this.pos < this.input.length && this.isAlnum(this.input[this.pos])) {
+                    this.advance();
+                }
+                const val = this.input.slice(start, this.pos);
+                // 'type' / 'export' are context-sensitive in Luau — not hard keywords
+                // (otherwise type(x) and local type = ... break)
+                const keywords = [
+                    'and', 'break', 'continue', 'do', 'else', 'elseif', 'end', 'false', 'for',
+                    'function', 'goto', 'if', 'in', 'local', 'nil', 'not', 'or', 'repeat',
+                    'return', 'then', 'true', 'until', 'while'
+                ];
+                return this.createToken(keywords.includes(val) ? 'Keyword' : 'Identifier', val);
+            }
+
+            consumeNumber() {
+                const startPos = this.pos;
+                const startLine = this.line;
+                const startCol = this.col;
+
+                // Hexadecimal 0x / 0X
+                if (this.input[this.pos] === '0' &&
+                    (this.input[this.pos + 1] === 'x' || this.input[this.pos + 1] === 'X')) {
+                    this.advance(2);
+                    if (!this.isHexDigit(this.input[this.pos])) {
+                        throw new Error(`Malformed hex number at line ${startLine}, col ${startCol}`);
+                    }
+                    while (this.pos < this.input.length && this.isHexDigit(this.input[this.pos])) {
+                        this.advance();
+                    }
+                    // optional fractional part of hex float (Lua 5.2+ / Luau)
+                    if (this.input[this.pos] === '.') {
+                        this.advance();
+                        while (this.pos < this.input.length && this.isHexDigit(this.input[this.pos])) {
+                            this.advance();
+                        }
+                    }
+                    // optional binary exponent
+                    if (this.input[this.pos] === 'p' || this.input[this.pos] === 'P') {
+                        this.advance();
+                        if (this.input[this.pos] === '+' || this.input[this.pos] === '-') this.advance();
+                        while (this.pos < this.input.length && this.isDigit(this.input[this.pos])) {
+                            this.advance();
+                        }
+                    }
+                    return this.createToken('Number', this.input.slice(startPos, this.pos));
+                }
+
+                // Decimal / float
+                while (this.pos < this.input.length && this.isDigit(this.input[this.pos])) {
+                    this.advance();
+                }
+                if (this.input[this.pos] === '.' && this.isDigit(this.input[this.pos + 1])) {
+                    this.advance(); // .
+                    while (this.pos < this.input.length && this.isDigit(this.input[this.pos])) {
+                        this.advance();
+                    }
+                }
+                // exponent
+                if (this.input[this.pos] === 'e' || this.input[this.pos] === 'E') {
+                    this.advance();
+                    if (this.input[this.pos] === '+' || this.input[this.pos] === '-') this.advance();
+                    if (!this.isDigit(this.input[this.pos])) {
+                        throw new Error(`Malformed number exponent at line ${startLine}, col ${startCol}`);
+                    }
+                    while (this.pos < this.input.length && this.isDigit(this.input[this.pos])) {
+                        this.advance();
+                    }
+                }
+                return this.createToken('Number', this.input.slice(startPos, this.pos));
+            }
+
+            consumeString(quote) {
+                const startLine = this.line;
+                this.advance(); // opening quote
+                let val = '';
+                while (this.pos < this.input.length && this.input[this.pos] !== quote) {
+                    if (this.input[this.pos] === '\\') {
+                        this.advance();
+                        if (this.pos >= this.input.length) break;
+                        const esc = this.input[this.pos];
+                        // keep the escape sequence as-is so parser can reconstruct
+                        val += '\\' + esc;
+                        this.advance();
+                    } else if (this.input[this.pos] === '\n') {
+                        throw new Error(`Unterminated string (newline) at line ${startLine}`);
+                    } else {
+                        val += this.input[this.pos];
+                        this.advance();
+                    }
+                }
+                if (this.pos >= this.input.length) {
+                    throw new Error(`Unterminated string at line ${startLine}`);
+                }
+                this.advance(); // closing quote
+                return this.createToken('String', val);
+            }
+
+            consumeLongString() {
+                const start = this.pos;
+                const startLine = this.line;
+                let levels = 0;
+                this.advance(); // [
+                while (this.input[this.pos] === '=') {
+                    levels++;
+                    this.advance();
+                }
+                if (this.input[this.pos] !== '[') {
+                    // not a long string – rewind
+                    this.pos = start;
+                    return null;
+                }
+                this.advance(); // [
+
+                const closing = ']' + '='.repeat(levels) + ']';
+                let val = '';
+                // Lua long strings may start with an optional newline that is discarded
+                if (this.input[this.pos] === '\n') this.advance();
+
+                while (this.pos < this.input.length &&
+                       this.input.slice(this.pos, this.pos + closing.length) !== closing) {
+                    val += this.input[this.pos];
+                    this.advance();
+                }
+                if (this.pos >= this.input.length) {
+                    throw new Error(`Unterminated long string starting at line ${startLine}`);
+                }
+                this.advance(closing.length);
+                return this.createToken('String', val); // raw content, no escapes
+            }
+
+            createToken(type, value) {
+                return { type, value, line: this.line, col: this.col };
+            }
+        }
+
+        /* ================================================================
+         *  PARSER – full precedence, functions, tables, assignments
+         * ================================================================ */
+        class LuaParser {
+            constructor(tokens) {
+                this.tokens = tokens;
+                this.pos = 0;
+                this.nodeCount = 0;
+            }
+
+            peek(offset = 0) {
+                return this.tokens[this.pos + offset] || this.tokens[this.tokens.length - 1];
+            }
+
+            consume(type, value = null) {
+                const t = this.peek();
+                if (t.type === type && (value === null || t.value === value)) {
+                    this.pos++;
+                    return t;
+                }
+                throw new Error(`Parse error: Expected ${type}${value ? " '" + value + "'" : ""}, got ${t.type} '${t.value}' at line ${t.line}, col ${t.col}`);
+            }
+
+            match(type, value = null) {
+                const t = this.peek();
+                if (t.type === type && (value === null || t.value === value)) {
+                    this.pos++;
+                    return true;
+                }
+                return false;
+            }
+
+            trackNode(node) {
+                this.nodeCount++;
+                return node;
+            }
+
+            parse() {
+                const body = this.parseBlock();
+                if (this.peek().type !== 'EOF') {
+                    const t = this.peek();
+                    throw new Error(`Unexpected token '${t.value}' at end of chunk (line ${t.line})`);
+                }
+                return { type: 'Chunk', body };
+            }
+
+            parseBlock() {
+                const statements = [];
+                while (!this.isBlockEnd() && this.peek().type !== 'EOF') {
+                    statements.push(this.parseStatement());
+                    this.match('Symbol', ';');
+                }
+                return statements;
+            }
+
+            isBlockEnd() {
+                const t = this.peek();
+                return t.type === 'Keyword' && ['end', 'else', 'elseif', 'until'].includes(t.value);
+            }
+
+            parseStatement() {
+                const t = this.peek();
+                if (t.type === 'Keyword') {
+                    if (t.value === 'local') return this.parseLocalStatement();
+                    if (t.value === 'if') return this.parseIfStatement();
+                    if (t.value === 'while') return this.parseWhileStatement();
+                    if (t.value === 'repeat') return this.parseRepeatStatement();
+                    if (t.value === 'for') return this.parseForStatement();
+                    if (t.value === 'return') return this.parseReturnStatement();
+                    if (t.value === 'function') return this.parseFunctionDeclaration(false);
+                    if (t.value === 'break') {
+                        this.consume('Keyword', 'break');
+                        return this.trackNode({ type: 'BreakStatement' });
+                    }
+                    if (t.value === 'continue') {
+                        this.consume('Keyword', 'continue');
+                        return this.trackNode({ type: 'ContinueStatement' });
+                    }
+                    if (t.value === 'goto') {
+                        this.consume('Keyword', 'goto');
+                        const label = this.consume('Identifier').value;
+                        return this.trackNode({ type: 'GotoStatement', label });
+                    }
+                    if (t.value === 'do') {
+                        this.consume('Keyword', 'do');
+                        const body = this.parseBlock();
+                        this.consume('Keyword', 'end');
+                        return this.trackNode({ type: 'DoStatement', body });
+                    }
+                }
+                // Label: ::name::
+                if (t.type === 'Operator' && t.value === '::') {
+                    this.pos++;
+                    const label = this.consume('Identifier').value;
+                    if (!(this.peek().type === 'Operator' && this.peek().value === '::')) {
+                        throw new Error(`Expected :: after label at line ${this.peek().line}`);
+                    }
+                    this.pos++;
+                    return this.trackNode({ type: 'LabelStatement', label });
+                }
+                // Luau context-sensitive: type Foo = ... / export type Foo = ...
+                // Do NOT treat type(x) as a type statement — only when followed by Name =
+                if (t.type === 'Identifier' && t.value === 'export' && this.peek(1).type === 'Identifier' && this.peek(1).value === 'type') {
+                    return this.parseTypeStatement();
+                }
+                if (t.type === 'Identifier' && t.value === 'type') {
+                    const n1 = this.peek(1);
+                    // type Name = ...  or type Name<T> = ...
+                    if (n1.type === 'Identifier' && (this.peek(2).value === '=' || this.peek(2).value === '<')) {
+                        return this.parseTypeStatement();
+                    }
+                }
+                return this.parseAssignmentOrCall();
+            }
+
+            parseTypeStatement() {
+                // Consume type / export type ... = <typeexpr> — treat as no-op for runtime
+                const isExport = (this.peek().type === 'Identifier' && this.peek().value === 'export');
+                if (isExport) this.pos++;
+                // 'type' as Identifier
+                if (this.peek().type === 'Identifier' && this.peek().value === 'type') this.pos++;
+                else if (this.peek().type === 'Keyword' && this.peek().value === 'type') this.pos++;
+                const name = this.consume('Identifier').value;
+                // optional generics <T, U>
+                if (this.match('Symbol', '<')) {
+                    while (!this.match('Symbol', '>') && this.peek().type !== 'EOF') this.pos++;
+                }
+                if (this.match('Symbol', '=')) {
+                    // skip type expression until newline-ish or next statement keyword
+                    // consume balanced tokens until we hit a statement boundary
+                    let depth = 0;
+                    while (this.peek().type !== 'EOF') {
+                        const t = this.peek();
+                        if (depth === 0 && t.type === 'Keyword' &&
+                            ['local','function','if','while','repeat','for','return','do','end','else','elseif','until','break','continue','goto','type','export'].includes(t.value)) break;
+                        if (depth === 0 && t.type === 'Operator' && t.value === '::') break;
+                        if (t.value === '(' || t.value === '{' || t.value === '[') depth++;
+                        if (t.value === ')' || t.value === '}' || t.value === ']') depth--;
+                        if (depth < 0) break;
+                        // stop at semicolon
+                        if (depth === 0 && t.value === ';') { this.pos++; break; }
+                        this.pos++;
+                        // heuristic: stop after a simple type on same "statement"
+                        if (depth === 0 && (t.type === 'Identifier' || t.type === 'Keyword' || t.value === '|' || t.value === '&' || t.value === '?' || t.value === ',' || t.value === '.' || t.value === ':')) {
+                            // continue
+                        } else if (depth === 0 && t.type !== 'Symbol') {
+                            // might be done - check if next is statement
+                        }
+                        // Limit runaway: if we see newline-only separation hard without source - rely on keywords
+                        if (this.pos > 0 && depth === 0 && this.peek().type === 'Keyword') break;
+                    }
+                }
+                return this.trackNode({ type: 'TypeStatement', name, isExport });
+            }
+
+            skipTypeAnnotation() {
+                // Luau: : Type or : Type? or : (T) -> U  etc.
+                if (!this.match('Symbol', ':')) return;
+                this.skipTypeExpr();
+            }
+            skipTypeExpr() {
+                let depth = 0;
+                let steps = 0;
+                while (this.peek().type !== 'EOF' && steps++ < 200) {
+                    const t = this.peek();
+                    if (depth === 0 && (t.value === ',' || t.value === '=' || t.value === ')' || t.value === ';' ||
+                        (t.type === 'Keyword' && ['end','then','do','local','function','return','if','while','for','repeat'].includes(t.value)))) break;
+                    if (t.value === '(' || t.value === '{' || t.value === '[') { depth++; this.pos++; continue; }
+                    if (t.value === ')' || t.value === '}' || t.value === ']') { if (depth === 0) break; depth--; this.pos++; continue; }
+                    if (depth === 0 && (t.value === '|' || t.value === '&' || t.value === '?' || t.value === '.' || t.value === ':' || t.type === 'Identifier' || t.type === 'Keyword' || t.type === 'String' || t.type === 'Number')) {
+                        this.pos++; continue;
+                    }
+                    if (depth > 0) { this.pos++; continue; }
+                    break;
+                }
+            }
+            parseLocalStatement() {
+                this.consume('Keyword', 'local');
+                if (this.match('Keyword', 'function')) {
+                    const id = this.consume('Identifier');
+                    const func = this.parseFunctionBody();
+                    return this.trackNode({ type: 'LocalFunction', name: id.value, func });
+                }
+                const names = [this.consume('Identifier').value];
+                this.skipTypeAnnotation();
+                while (this.match('Symbol', ',')) {
+                    names.push(this.consume('Identifier').value);
+                    this.skipTypeAnnotation();
+                }
+                let inits = [];
+                if (this.match('Symbol', '=')) {
+                    inits = this.parseExpressionList();
+                }
+                return this.trackNode({ type: 'LocalStatement', names, inits });
+            }
+
+            parseIfStatement() {
+                this.consume('Keyword', 'if');
+                const condition = this.parseExpression();
+                this.consume('Keyword', 'then');
+                const body = this.parseBlock();
+                const node = { type: 'IfStatement', condition, body, elseifs: [], elseBody: null };
+                while (this.match('Keyword', 'elseif')) {
+                    const elCond = this.parseExpression();
+                    this.consume('Keyword', 'then');
+                    const elBody = this.parseBlock();
+                    node.elseifs.push({ condition: elCond, body: elBody });
+                }
+                if (this.match('Keyword', 'else')) {
+                    node.elseBody = this.parseBlock();
+                }
+                this.consume('Keyword', 'end');
+                return this.trackNode(node);
+            }
+
+            parseWhileStatement() {
+                this.consume('Keyword', 'while');
+                const condition = this.parseExpression();
+                this.consume('Keyword', 'do');
+                const body = this.parseBlock();
+                this.consume('Keyword', 'end');
+                return this.trackNode({ type: 'WhileStatement', condition, body });
+            }
+
+            parseRepeatStatement() {
+                this.consume('Keyword', 'repeat');
+                const body = this.parseBlock();
+                this.consume('Keyword', 'until');
+                const condition = this.parseExpression();
+                return this.trackNode({ type: 'RepeatStatement', body, condition });
+            }
+
+            parseForStatement() {
+                this.consume('Keyword', 'for');
+                const name = this.consume('Identifier').value;
+                if (this.match('Symbol', '=')) {
+                    // numeric for
+                    const start = this.parseExpression();
+                    this.consume('Symbol', ',');
+                    const end = this.parseExpression();
+                    let step = null;
+                    if (this.match('Symbol', ',')) {
+                        step = this.parseExpression();
+                    }
+                    this.consume('Keyword', 'do');
+                    const body = this.parseBlock();
+                    this.consume('Keyword', 'end');
+                    return this.trackNode({ type: 'ForNumericStatement', name, start, end, step, body });
+                } else {
+                    // generic for
+                    const names = [name];
+                    while (this.match('Symbol', ',')) {
+                        names.push(this.consume('Identifier').value);
+                    }
+                    this.consume('Keyword', 'in');
+                    const iters = this.parseExpressionList();
+                    this.consume('Keyword', 'do');
+                    const body = this.parseBlock();
+                    this.consume('Keyword', 'end');
+                    return this.trackNode({ type: 'ForGenericStatement', names, iterators: iters, body });
+                }
+            }
+
+            parseReturnStatement() {
+                this.consume('Keyword', 'return');
+                let args = [];
+                if (!this.isBlockEnd() && this.peek().type !== 'EOF' && this.peek().value !== ';') {
+                    args = this.parseExpressionList();
+                }
+                return this.trackNode({ type: 'ReturnStatement', arguments: args });
+            }
+
+            parseFunctionDeclaration(isLocal) {
+                this.consume('Keyword', 'function');
+                // name can be a.b.c:method
+                let nameParts = [this.consume('Identifier').value];
+                let isMethod = false;
+                while (this.match('Symbol', '.') || this.match('Symbol', ':')) {
+                    if (this.tokens[this.pos - 1].value === ':') isMethod = true;
+                    nameParts.push(this.consume('Identifier').value);
+                }
+                const func = this.parseFunctionBody(isMethod);
+                return this.trackNode({
+                    type: isLocal ? 'LocalFunction' : 'GlobalFunction',
+                    name: nameParts.join('.'),
+                    nameParts,
+                    isMethod,
+                    func
+                });
+            }
+
+            parseAssignmentOrCall() {
+                const expr = this.parsePrefixExp();
+                if (expr.type === 'CallExpression') {
+                    return this.trackNode({ type: 'ExpressionStatement', expression: expr });
+                }
+                // possible multi-assignment
+                const vars = [expr];
+                while (this.match('Symbol', ',')) {
+                    vars.push(this.parsePrefixExp());
+                }
+                this.consume('Symbol', '=');
+                const inits = this.parseExpressionList();
+                return this.trackNode({ type: 'AssignmentStatement', variables: vars, inits });
+            }
+
+            parseExpressionList() {
+                const exprs = [this.parseExpression()];
+                while (this.match('Symbol', ',')) {
+                    exprs.push(this.parseExpression());
+                }
+                return exprs;
+            }
+
+            // Expression precedence (lowest → highest)
+            parseExpression() {
+                return this.parseLogicalOr();
+            }
+
+            parseLogicalOr() {
+                let left = this.parseLogicalAnd();
+                while (this.match('Keyword', 'or')) {
+                    left = this.trackNode({
+                        type: 'BinaryExpression',
+                        operator: 'or',
+                        left,
+                        right: this.parseLogicalAnd()
+                    });
+                }
+                return left;
+            }
+
+            parseLogicalAnd() {
+                let left = this.parseEquality();
+                while (this.match('Keyword', 'and')) {
+                    left = this.trackNode({
+                        type: 'BinaryExpression',
+                        operator: 'and',
+                        left,
+                        right: this.parseEquality()
+                    });
+                }
+                return left;
+            }
+
+            parseEquality() {
+                let left = this.parseRelational();
+                while (true) {
+                    const op = this.peek().value;
+                    if (op === '==' || op === '~=') {
+                        this.pos++;
+                        left = this.trackNode({
+                            type: 'BinaryExpression',
+                            operator: op,
+                            left,
+                            right: this.parseRelational()
+                        });
+                    } else break;
+                }
+                return left;
+            }
+
+            parseRelational() {
+                let left = this.parseConcat();
+                while (true) {
+                    const op = this.peek().value;
+                    if (['<', '>', '<=', '>='].includes(op)) {
+                        this.pos++;
+                        left = this.trackNode({
+                            type: 'BinaryExpression',
+                            operator: op,
+                            left,
+                            right: this.parseConcat()
+                        });
+                    } else break;
+                }
+                return left;
+            }
+
+            parseConcat() {
+                // right-associative
+                let left = this.parseAdditive();
+                if (this.match('Operator', '..')) {
+                    left = this.trackNode({
+                        type: 'BinaryExpression',
+                        operator: '..',
+                        left,
+                        right: this.parseConcat()
+                    });
+                }
+                return left;
+            }
+
+            parseAdditive() {
+                let left = this.parseMultiplicative();
+                while (true) {
+                    const op = this.peek().value;
+                    if (op === '+' || op === '-') {
+                        this.pos++;
+                        left = this.trackNode({
+                            type: 'BinaryExpression',
+                            operator: op,
+                            left,
+                            right: this.parseMultiplicative()
+                        });
+                    } else break;
+                }
+                return left;
+            }
+
+            parseMultiplicative() {
+                let left = this.parseUnary();
+                while (true) {
+                    const op = this.peek().value;
+                    if (['*', '/', '%', '//'].includes(op)) {
+                        this.pos++;
+                        left = this.trackNode({
+                            type: 'BinaryExpression',
+                            operator: op,
+                            left,
+                            right: this.parseUnary()
+                        });
+                    } else break;
+                }
+                return left;
+            }
+
+            parseUnary() {
+                const t = this.peek();
+                if ((t.type === 'Keyword' && t.value === 'not') ||
+                    (t.type === 'Symbol' && (t.value === '-' || t.value === '#')) ||
+                    (t.type === 'Operator' && t.value === '-')) {
+                    this.pos++;
+                    return this.trackNode({
+                        type: 'UnaryExpression',
+                        operator: t.value,
+                        argument: this.parseUnary()
+                    });
+                }
+                return this.parsePower();
+            }
+
+            parsePower() {
+                // right-associative
+                let left = this.parsePrimary();
+                if (this.match('Symbol', '^')) {
+                    left = this.trackNode({
+                        type: 'BinaryExpression',
+                        operator: '^',
+                        left,
+                        right: this.parseUnary()
+                    });
+                }
+                return left;
+            }
+
+            parsePrimary() {
+                const t = this.peek();
+
+                if (t.type === 'Number') {
+                    this.pos++;
+                    let num = t.value;
+                    if (num.startsWith('0x') || num.startsWith('0X')) {
+                        // keep as number; JS parseInt handles 0x
+                        return this.trackNode({ type: 'Literal', value: parseInt(num, 16), raw: t.value });
+                    }
+                    return this.trackNode({ type: 'Literal', value: parseFloat(num), raw: t.value });
+                }
+                if (t.type === 'String') {
+                    this.pos++;
+                    // interpret simple escapes for the constant value
+                    const interpreted = this.interpretStringEscapes(t.value);
+                    return this.trackNode({ type: 'Literal', value: interpreted, raw: `"${t.value}"` });
+                }
+                if (t.type === 'Keyword' && ['true', 'false', 'nil'].includes(t.value)) {
+                    this.pos++;
+                    const val = t.value === 'true' ? true : (t.value === 'false' ? false : null);
+                    return this.trackNode({ type: 'Literal', value: val, raw: t.value });
+                }
+                if (t.type === 'Keyword' && t.value === 'function') {
+                    this.pos++;
+                    return this.parseFunctionBody(false);
+                }
+                if (t.type === 'Varargs') {
+                    this.pos++;
+                    return this.trackNode({ type: 'VarargExpression' });
+                }
+                if (t.type === 'Symbol' && t.value === '{') {
+                    return this.parseTableConstructor();
+                }
+                return this.parsePrefixExp();
+            }
+
+            interpretStringEscapes(raw) {
+                // Convert common Lua escapes into actual characters for the constant pool
+                let out = '';
+                for (let i = 0; i < raw.length; i++) {
+                    if (raw[i] === '\\' && i + 1 < raw.length) {
+                        const n = raw[i + 1];
+                        if (n === 'n') { out += '\n'; i++; }
+                        else if (n === 't') { out += '\t'; i++; }
+                        else if (n === 'r') { out += '\r'; i++; }
+                        else if (n === '\\') { out += '\\'; i++; }
+                        else if (n === '"') { out += '"'; i++; }
+                        else if (n === "'") { out += "'"; i++; }
+                        else if (n === '0') { out += '\0'; i++; }
+                        else if (n >= '0' && n <= '9') {
+                            // decimal escape \ddd
+                            let digits = n;
+                            i++;
+                            if (i + 1 < raw.length && raw[i + 1] >= '0' && raw[i + 1] <= '9') {
+                                digits += raw[++i];
+                                if (i + 1 < raw.length && raw[i + 1] >= '0' && raw[i + 1] <= '9') {
+                                    digits += raw[++i];
+                                }
+                            }
+                            out += String.fromCharCode(parseInt(digits, 10));
+                        } else {
+                            out += n; // unknown escape – keep character
+                            i++;
+                        }
+                    } else {
+                        out += raw[i];
+                    }
+                }
+                return out;
+            }
+
+            parsePrefixExp() {
+                let expr;
+                if (this.match('Symbol', '(')) {
+                    expr = this.parseExpression();
+                    this.consume('Symbol', ')');
+                } else {
+                    const id = this.consume('Identifier');
+                    expr = this.trackNode({ type: 'Identifier', name: id.value });
+                }
+
+                while (true) {
+                    if (this.match('Symbol', '[')) {
+                        const index = this.parseExpression();
+                        this.consume('Symbol', ']');
+                        expr = this.trackNode({ type: 'IndexExpression', base: expr, index });
+                    } else if (this.match('Symbol', '.')) {
+                        const id = this.consume('Identifier');
+                        expr = this.trackNode({ type: 'MemberExpression', base: expr, identifier: id.value, computed: false });
+                    } else if (this.match('Symbol', ':')) {
+                        const id = this.consume('Identifier');
+                        // method call – next must be call
+                        expr = this.trackNode({ type: 'MemberExpression', base: expr, identifier: id.value, computed: false, method: true });
+                        // force a call
+                        if (this.peek().type === 'Symbol' && this.peek().value === '(') {
+                            this.consume('Symbol', '(');
+                            let args = [];
+                            if (!this.match('Symbol', ')')) {
+                                args = this.parseExpressionList();
+                                this.consume('Symbol', ')');
+                            }
+                            expr = this.trackNode({ type: 'CallExpression', base: expr, arguments: args, method: true });
+                        } else if (this.peek().type === 'String') {
+                            const arg = this.parsePrimary();
+                            expr = this.trackNode({ type: 'CallExpression', base: expr, arguments: [arg], method: true });
+                        } else if (this.peek().type === 'Symbol' && this.peek().value === '{') {
+                            const arg = this.parseTableConstructor();
+                            expr = this.trackNode({ type: 'CallExpression', base: expr, arguments: [arg], method: true });
+                        } else {
+                            throw new Error(`Expected call after method selector at line ${this.peek().line}`);
+                        }
+                    } else if (this.peek().type === 'Symbol' && this.peek().value === '(') {
+                        this.consume('Symbol', '(');
+                        let args = [];
+                        if (!this.match('Symbol', ')')) {
+                            args = this.parseExpressionList();
+                            this.consume('Symbol', ')');
+                        }
+                        expr = this.trackNode({ type: 'CallExpression', base: expr, arguments: args });
+                    } else if (this.peek().type === 'String') {
+                        const arg = this.parsePrimary();
+                        expr = this.trackNode({ type: 'CallExpression', base: expr, arguments: [arg] });
+                    } else if (this.peek().type === 'Symbol' && this.peek().value === '{') {
+                        const arg = this.parseTableConstructor();
+                        expr = this.trackNode({ type: 'CallExpression', base: expr, arguments: [arg] });
+                    } else {
+                        break;
+                    }
+                }
+                return expr;
+            }
+
+            parseFunctionBody(isMethod = false) {
+                this.consume('Symbol', '(');
+                const params = [];
+                if (isMethod) params.push('self');
+                if (!this.match('Symbol', ')')) {
+                    if (this.peek().type === 'Identifier') {
+                        params.push(this.consume('Identifier').value);
+                        this.skipTypeAnnotation();
+                        while (this.match('Symbol', ',')) {
+                            if (this.peek().type === 'Varargs') {
+                                this.pos++;
+                                params.push('...');
+                                this.skipTypeAnnotation();
+                                break;
+                            }
+                            params.push(this.consume('Identifier').value);
+                            this.skipTypeAnnotation();
+                        }
+                    } else if (this.peek().type === 'Varargs') {
+                        this.pos++;
+                        params.push('...');
+                        this.skipTypeAnnotation();
+                    }
+                    this.consume('Symbol', ')');
+                }
+                // return type : T
+                this.skipTypeAnnotation();
+                const body = this.parseBlock();
+                this.consume('Keyword', 'end');
+                return this.trackNode({ type: 'FunctionDeclaration', parameters: params, body });
+            }
+
+            parseTableConstructor() {
+                this.consume('Symbol', '{');
+                const fields = [];
+                while (!this.match('Symbol', '}')) {
+                    if (this.match('EOF')) break;
+                    if (this.match('Symbol', '[')) {
+                        const key = this.parseExpression();
+                        this.consume('Symbol', ']');
+                        this.consume('Symbol', '=');
+                        const val = this.parseExpression();
+                        fields.push({ type: 'TableKey', key, value: val });
+                    } else if (this.peek().type === 'Identifier' && this.peek(1).value === '=') {
+                        const key = this.consume('Identifier').value;
+                        this.consume('Symbol', '=');
+                        const val = this.parseExpression();
+                        fields.push({ type: 'TableKeyString', key, value: val });
+                    } else {
+                        fields.push({ type: 'TableValue', value: this.parseExpression() });
+                    }
+                    if (!this.match('Symbol', ',') && !this.match('Symbol', ';')) {
+                        if (this.peek().value !== '}') {
+                            throw new Error(`Expected ',' or '}' in table at line ${this.peek().line}`);
+                        }
+                    }
+                }
+                return this.trackNode({ type: 'TableConstructor', fields });
+            }
+        }
+
+        /* ================================================================
+         *  VM COMPILER – full opcode set, locals as slots, scopes, functions
+         * ================================================================ */
+        class VMCompiler {
+            constructor(ast, config) {
+                this.ast = ast;
+                this.config = config;
+                this.instructions = [];
+                this.constants = [];
+                this.functions = []; // nested function protos
+
+                this.OP = {
+                    PUSH_CONST: 1,
+                    PUSH_LOCAL: 2,
+                    PUSH_GLOBAL: 3,
+                    STORE_LOCAL: 4,
+                    STORE_GLOBAL: 5,
+                    ADD: 6, SUB: 7, MUL: 8, DIV: 9, MOD: 10, POW: 11,
+                    EQ: 12, NEQ: 13, LT: 14, GT: 15, LTE: 16, GTE: 17,
+                    JMP: 18, JMPF: 19, JMPT: 20,
+                    CALL: 21, RET: 22,
+                    GET_TABLE: 23, SET_TABLE: 24, NEW_TABLE: 25,
+                    CONCAT: 26,
+                    NOT: 27, NEG: 28, LEN: 29,
+                    MOVE: 30,
+                    CLOSURE: 31,
+                    GET_UPVAL: 32, SET_UPVAL: 33,
+                    AND: 34, OR: 35, // short-circuit helpers (used via jumps mostly)
+                    FORPREP: 36, FORLOOP: 37,
+                    VARARG: 38,
+                    SETLIST: 39,
+                    // Multi-return helpers
+                    CALL_MR: 40, RET_MR: 41,
+                    // Coroutines (thin wrappers over coroutine library)
+                    CO_CREATE: 42, CO_RESUME: 43, CO_YIELD: 44, CO_STATUS: 45
+                };
+                // Label name → instruction index (for goto)
+                this.labels = new Map();
+                this.gotoPending = []; // { idx, label }
+
+                // Scope stack: each scope is Map<name, slotIndex>
+                this.scopes = [new Map()];
+                this.localCount = 0;
+                // Stack of outer function scopes for upvalue resolution
+                // Each entry: { scopes: Map[], localCount: number }
+                this.outerFuncScopes = [];
+                // Break/continue stacks: JMP indices to patch to loop end / loop start
+                this.breakStack = [];
+                this.continueStack = [];
+            }
+
+            pushBreakTarget() {
+                this.breakStack.push([]);
+                this.continueStack.push([]);
+            }
+
+            popBreakTarget(endIndex, continueIndex) {
+                const breaks = this.breakStack.pop() || [];
+                breaks.forEach(jmpIdx => {
+                    this.instructions[jmpIdx].arg = endIndex;
+                });
+                const continues = this.continueStack.pop() || [];
+                const cTarget = continueIndex !== undefined ? continueIndex : endIndex;
+                continues.forEach(jmpIdx => {
+                    this.instructions[jmpIdx].arg = cTarget;
+                });
+            }
+
+            compile() {
+                this.visit(this.ast);
+                this.emit(this.OP.RET, 0); // ensure chunk returns
+                // Resolve pending gotos
+                this.gotoPending.forEach(({ idx, label }) => {
+                    if (!this.labels.has(label)) {
+                        throw new Error(`[InvalidJumpTarget] undefined label '${label}' (stage: encoder)`);
+                    }
+                    this.instructions[idx].arg = this.labels.get(label);
+                });
+                return {
+                    instructions: this.instructions,
+                    constants: this.constants,
+                    functions: this.functions,
+                    opMap: this.OP
+                };
+            }
+
+            emit(op, arg = 0) {
+                const idx = this.instructions.length;
+                this.instructions.push({ op, arg, index: idx });
+                return idx;
+            }
+
+            addConstant(val) {
+                // Use strict equality with a simple linear search (fine for typical sizes)
+                for (let i = 0; i < this.constants.length; i++) {
+                    if (this.constants[i] === val) return i;
+                }
+                this.constants.push(val);
+                return this.constants.length - 1;
+            }
+
+            // Lexical scope helpers
+            pushScope() {
+                this.scopes.push(new Map());
+            }
+            popScope() {
+                this.scopes.pop();
+            }
+            declareLocal(name) {
+                const slot = this.localCount++;
+                this.scopes[this.scopes.length - 1].set(name, slot);
+                return slot;
+            }
+            resolveLocal(name) {
+                // Returns { slot, depth } or null. depth 0 = current function.
+                for (let i = this.scopes.length - 1; i >= 0; i--) {
+                    if (this.scopes[i].has(name)) {
+                        return { slot: this.scopes[i].get(name), depth: 0 };
+                    }
+                }
+                for (let f = this.outerFuncScopes.length - 1; f >= 0; f--) {
+                    const outer = this.outerFuncScopes[f];
+                    for (let i = outer.scopes.length - 1; i >= 0; i--) {
+                        if (outer.scopes[i].has(name)) {
+                            // depth = how many parent frames to walk (1 = immediate parent)
+                            const depth = this.outerFuncScopes.length - f;
+                            return { slot: outer.scopes[i].get(name), depth };
+                        }
+                    }
+                }
+                return null; // global
+            }
+            localArg(info) {
+                // Encode depth and slot into one operand
+                return (info.depth || 0) * 10000 + info.slot;
+            }
+
+            visit(node) {
+                if (!node) return;
+                const handler = this['visit_' + node.type];
+                if (!handler) {
+                    throw new Error(`VM Compiler: unsupported AST node type '${node.type}'`);
+                }
+                return handler.call(this, node);
+            }
+
+            visit_Chunk(node) {
+                node.body.forEach(s => this.visit(s));
+            }
+
+            visit_LocalStatement(node) {
+                const initCount = node.inits.length;
+                // local a, b, c = f()  → multi-return expand
+                if (initCount === 1 && node.inits[0].type === 'CallExpression' && node.names.length > 1) {
+                    this.visitCallMR(node.inits[0], node.names.length);
+                    for (let i = node.names.length - 1; i >= 0; i--) {
+                        this.emit(this.OP.STORE_LOCAL, this.declareLocal(node.names[i]));
+                    }
+                    return;
+                }
+                for (let i = 0; i < node.names.length; i++) {
+                    if (i < initCount) this.visit(node.inits[i]);
+                    else this.emit(this.OP.PUSH_CONST, this.addConstant(null));
+                }
+                for (let i = node.names.length - 1; i >= 0; i--) {
+                    this.emit(this.OP.STORE_LOCAL, this.declareLocal(node.names[i]));
+                }
+            }
+
+            visit_AssignmentStatement(node) {
+                const lhsCount = node.variables.length;
+                const rhsCount = node.inits.length;
+                if (rhsCount === 1 && node.inits[0].type === 'CallExpression' && lhsCount > 1) {
+                    this.visitCallMR(node.inits[0], lhsCount);
+                } else {
+                    node.inits.forEach(init => this.visit(init));
+                    for (let i = rhsCount; i < lhsCount; i++) {
+                        this.emit(this.OP.PUSH_CONST, this.addConstant(null));
+                    }
+                }
+                for (let i = lhsCount - 1; i >= 0; i--) {
+                    this.compileStore(node.variables[i]);
+                }
+            }
+
+            compileStore(target) {
+                if (target.type === 'Identifier') {
+                    const info = this.resolveLocal(target.name);
+                    if (info) {
+                        this.emit(this.OP.STORE_LOCAL, this.localArg(info));
+                    } else {
+                        this.emit(this.OP.STORE_GLOBAL, this.addConstant(target.name));
+                    }
+                } else if (target.type === 'IndexExpression' || target.type === 'MemberExpression') {
+                    const tmp = this.declareLocal('__settmp' + this.localCount);
+                    this.emit(this.OP.STORE_LOCAL, tmp); // depth 0
+                    if (target.type === 'IndexExpression') {
+                        this.visit(target.base);
+                        this.visit(target.index);
+                    } else {
+                        this.visit(target.base);
+                        this.emit(this.OP.PUSH_CONST, this.addConstant(target.identifier));
+                    }
+                    this.emit(this.OP.PUSH_LOCAL, tmp);
+                    this.emit(this.OP.SET_TABLE);
+                } else {
+                    throw new Error(`Cannot assign to ${target.type}`);
+                }
+            }
+
+            visit_ExpressionStatement(node) {
+                this.visit(node.expression);
+                this.emit(this.OP.STORE_LOCAL, this.declareLocal('__discard_' + this.localCount));
+            }
+
+            visit_Literal(node) {
+                this.emit(this.OP.PUSH_CONST, this.addConstant(node.value));
+            }
+
+            visit_Identifier(node) {
+                const info = this.resolveLocal(node.name);
+                if (info) {
+                    this.emit(this.OP.PUSH_LOCAL, this.localArg(info));
+                } else {
+                    this.emit(this.OP.PUSH_GLOBAL, this.addConstant(node.name));
+                }
+            }
+
+            visit_BinaryExpression(node) {
+                // Short-circuit and/or – Lua returns the operand VALUE, not a boolean.
+                // Critical for: player.Character or player.CharacterAdded:Wait()
+                if (node.operator === 'and') {
+                    // left and right → if left falsy return left, else return right
+                    this.visit(node.left);
+                    this.emit(this.OP.MOVE); // dup left
+                    const falseJump = this.emit(this.OP.JMPF, 0); // pops dup; if falsy keep left
+                    // truthy: discard left, eval right
+                    this.emit(this.OP.STORE_LOCAL, this.declareLocal('__and_d' + this.localCount));
+                    this.visit(node.right);
+                    const endJump = this.emit(this.OP.JMP, 0);
+                    this.instructions[falseJump].arg = this.instructions.length;
+                    this.instructions[endJump].arg = this.instructions.length;
+                    return;
+                }
+                if (node.operator === 'or') {
+                    // left or right → if left truthy return left, else return right
+                    this.visit(node.left);
+                    this.emit(this.OP.MOVE); // dup left
+                    const trueJump = this.emit(this.OP.JMPT, 0); // pops dup; if truthy keep left
+                    // falsy: discard left, eval right
+                    this.emit(this.OP.STORE_LOCAL, this.declareLocal('__or_d' + this.localCount));
+                    this.visit(node.right);
+                    const endJump = this.emit(this.OP.JMP, 0);
+                    this.instructions[trueJump].arg = this.instructions.length;
+                    this.instructions[endJump].arg = this.instructions.length;
+                    return;
+                }
+
+                this.visit(node.left);
+                this.visit(node.right);
+                const map = {
+                    '+': this.OP.ADD, '-': this.OP.SUB, '*': this.OP.MUL,
+                    '/': this.OP.DIV, '%': this.OP.MOD, '^': this.OP.POW,
+                    '==': this.OP.EQ, '~=': this.OP.NEQ,
+                    '<': this.OP.LT, '>': this.OP.GT,
+                    '<=': this.OP.LTE, '>=': this.OP.GTE,
+                    '..': this.OP.CONCAT
+                };
+                if (map[node.operator] === undefined) {
+                    throw new Error(`Unsupported binary operator: ${node.operator}`);
+                }
+                this.emit(map[node.operator]);
+            }
+
+            visit_UnaryExpression(node) {
+                this.visit(node.argument);
+                if (node.operator === 'not') this.emit(this.OP.NOT);
+                else if (node.operator === '-') this.emit(this.OP.NEG);
+                else if (node.operator === '#') this.emit(this.OP.LEN);
+                else throw new Error(`Unsupported unary operator: ${node.operator}`);
+            }
+
+            visit_CallExpression(node) {
+                // Push function
+                if (node.method) {
+                    // obj:method(args) → push obj, get method, push obj as self, then args
+                    this.visit(node.base.base);
+                    this.emit(this.OP.PUSH_CONST, this.addConstant(node.base.identifier));
+                    this.emit(this.OP.GET_TABLE);
+                    // self
+                    this.visit(node.base.base);
+                    node.arguments.forEach(a => this.visit(a));
+                    this.emit(this.OP.CALL, node.arguments.length + 1);
+                } else {
+                    this.visit(node.base);
+                    node.arguments.forEach(a => this.visit(a));
+                    this.emit(this.OP.CALL, node.arguments.length);
+                }
+            }
+
+            visit_MemberExpression(node) {
+                this.visit(node.base);
+                this.emit(this.OP.PUSH_CONST, this.addConstant(node.identifier));
+                this.emit(this.OP.GET_TABLE);
+            }
+
+            visit_IndexExpression(node) {
+                this.visit(node.base);
+                this.visit(node.index);
+                this.emit(this.OP.GET_TABLE);
+            }
+
+            visit_TableConstructor(node) {
+                this.emit(this.OP.NEW_TABLE);
+                let arrayIndex = 1;
+                node.fields.forEach(f => {
+                    if (f.type === 'TableValue') {
+                        // array part
+                        this.emit(this.OP.PUSH_CONST, this.addConstant(arrayIndex++));
+                        this.visit(f.value);
+                        this.emit(this.OP.SET_TABLE);
+                    } else if (f.type === 'TableKeyString') {
+                        this.emit(this.OP.PUSH_CONST, this.addConstant(f.key));
+                        this.visit(f.value);
+                        this.emit(this.OP.SET_TABLE);
+                    } else if (f.type === 'TableKey') {
+                        this.visit(f.key);
+                        this.visit(f.value);
+                        this.emit(this.OP.SET_TABLE);
+                    }
+                });
+            }
+
+            visit_ReturnStatement(node) {
+                if (node.arguments.length === 0) {
+                    this.emit(this.OP.PUSH_CONST, this.addConstant(null));
+                    this.emit(this.OP.RET, 0);
+                } else if (node.arguments.length === 1 && node.arguments[0].type === 'CallExpression') {
+                    // return f(...) — multi-return passthrough via CALL_MR then RET_MR
+                    this.visitCallMR(node.arguments[0], 8); // up to 8 values
+                    this.emit(this.OP.RET_MR, 8);
+                } else {
+                    node.arguments.forEach(a => this.visit(a));
+                    this.emit(this.OP.RET_MR, node.arguments.length);
+                }
+            }
+
+            visitCallMR(node, nRets) {
+                if (node.method) {
+                    this.visit(node.base.base);
+                    this.emit(this.OP.PUSH_CONST, this.addConstant(node.base.identifier));
+                    this.emit(this.OP.GET_TABLE);
+                    this.visit(node.base.base);
+                    node.arguments.forEach(a => this.visit(a));
+                    this.emit(this.OP.CALL, (node.arguments.length + 1) + nRets * 1000);
+                } else {
+                    this.visit(node.base);
+                    node.arguments.forEach(a => this.visit(a));
+                    this.emit(this.OP.CALL, node.arguments.length + nRets * 1000);
+                }
+            }
+
+            visit_IfStatement(node) {
+                this.visit(node.condition);
+                const jmpf = this.emit(this.OP.JMPF, 0);
+                node.body.forEach(s => this.visit(s));
+                const endJumps = [];
+                if (node.elseifs.length || node.elseBody) {
+                    endJumps.push(this.emit(this.OP.JMP, 0));
+                }
+                this.instructions[jmpf].arg = this.instructions.length;
+
+                node.elseifs.forEach(ei => {
+                    this.visit(ei.condition);
+                    const jf = this.emit(this.OP.JMPF, 0);
+                    ei.body.forEach(s => this.visit(s));
+                    endJumps.push(this.emit(this.OP.JMP, 0));
+                    this.instructions[jf].arg = this.instructions.length;
+                });
+
+                if (node.elseBody) {
+                    node.elseBody.forEach(s => this.visit(s));
+                }
+                endJumps.forEach(j => {
+                    this.instructions[j].arg = this.instructions.length;
+                });
+            }
+
+            visit_WhileStatement(node) {
+                this.pushBreakTarget();
+                const loopStart = this.instructions.length;
+                this.visit(node.condition);
+                const jmpf = this.emit(this.OP.JMPF, 0);
+                node.body.forEach(s => this.visit(s));
+                this.emit(this.OP.JMP, loopStart);
+                this.instructions[jmpf].arg = this.instructions.length;
+                this.popBreakTarget(this.instructions.length, loopStart);
+            }
+
+            visit_RepeatStatement(node) {
+                this.pushBreakTarget();
+                const loopStart = this.instructions.length;
+                node.body.forEach(s => this.visit(s));
+                this.visit(node.condition);
+                this.emit(this.OP.JMPF, loopStart); // until condition is true
+                this.popBreakTarget(this.instructions.length, loopStart);
+            }
+
+            visit_ForNumericStatement(node) {
+                // Simplified numeric for: create locals for var, limit, step
+                this.visit(node.start);
+                const varSlot = this.declareLocal(node.name);
+                this.emit(this.OP.STORE_LOCAL, varSlot);
+
+                this.visit(node.end);
+                const limitSlot = this.declareLocal('__for_limit_' + this.localCount);
+                this.emit(this.OP.STORE_LOCAL, limitSlot);
+
+                if (node.step) {
+                    this.visit(node.step);
+                } else {
+                    this.emit(this.OP.PUSH_CONST, this.addConstant(1));
+                }
+                const stepSlot = this.declareLocal('__for_step_' + this.localCount);
+                this.emit(this.OP.STORE_LOCAL, stepSlot);
+
+                this.pushBreakTarget();
+                const loopStart = this.instructions.length;
+                // condition: var <= limit (positive step assumed for simplicity)
+                this.emit(this.OP.PUSH_LOCAL, varSlot);
+                this.emit(this.OP.PUSH_LOCAL, limitSlot);
+                this.emit(this.OP.LTE);
+                const jmpf = this.emit(this.OP.JMPF, 0);
+
+                node.body.forEach(s => this.visit(s));
+
+                // increment
+                this.emit(this.OP.PUSH_LOCAL, varSlot);
+                this.emit(this.OP.PUSH_LOCAL, stepSlot);
+                this.emit(this.OP.ADD);
+                this.emit(this.OP.STORE_LOCAL, varSlot);
+                this.emit(this.OP.JMP, loopStart);
+                this.instructions[jmpf].arg = this.instructions.length;
+                this.popBreakTarget(this.instructions.length, loopStart);
+            }
+
+            visit_ForGenericStatement(node) {
+                // Lua generic for:
+                //   for name1, name2, ... in explist do body end
+                // evaluates explist → f, s, var
+                // then loops: name1,name2,... = f(s, var); if name1==nil break; var=name1; body
+
+                const iterExprs = node.iterators;
+
+                // Most common case: single call expression that returns f, s, var (pairs/ipairs/next)
+                if (iterExprs.length === 1 && iterExprs[0].type === 'CallExpression') {
+                    const call = iterExprs[0];
+                    this.visit(call.base);
+                    call.arguments.forEach(a => this.visit(a));
+                    // multi-return 3 values: f, state, control
+                    this.emit(this.OP.CALL, call.arguments.length + 3 * 1000);
+                } else {
+                    // Multiple expressions or non-call: evaluate each (single value) and pad to 3
+                    iterExprs.forEach(e => this.visit(e));
+                    for (let i = iterExprs.length; i < 3; i++) {
+                        this.emit(this.OP.PUSH_CONST, this.addConstant(null));
+                    }
+                }
+
+                // Stack: [f, s, var] with var on top
+                const varSlot = this.declareLocal('__for_var_' + this.localCount);
+                const stateSlot = this.declareLocal('__for_state_' + this.localCount);
+                const funcSlot = this.declareLocal('__for_func_' + this.localCount);
+
+                this.emit(this.OP.STORE_LOCAL, varSlot);   // control
+                this.emit(this.OP.STORE_LOCAL, stateSlot); // state
+                this.emit(this.OP.STORE_LOCAL, funcSlot);  // iterator function
+
+                // Declare loop variables
+                const nameSlots = node.names.map(n => this.declareLocal(n));
+
+                this.pushBreakTarget();
+                const loopStart = this.instructions.length;
+
+                // Call f(state, var) – push f, state, var, CALL 2 with multi-ret for #names results
+                this.emit(this.OP.PUSH_LOCAL, funcSlot);
+                this.emit(this.OP.PUSH_LOCAL, stateSlot);
+                this.emit(this.OP.PUSH_LOCAL, varSlot);
+                // Encode: numArgs + numRets*1000
+                this.emit(this.OP.CALL, 2 + nameSlots.length * 1000);
+
+                // Multi-return CALL leaves exactly #names values on stack (padded with nil)
+                // Store into loop vars right-to-left
+                for (let i = nameSlots.length - 1; i >= 0; i--) {
+                    this.emit(this.OP.STORE_LOCAL, nameSlots[i]);
+                }
+
+                // if first loop var is nil → exit
+                this.emit(this.OP.PUSH_LOCAL, nameSlots[0]);
+                const exitJmp = this.emit(this.OP.JMPF, 0); // if nil/false, exit
+
+                // var = name1 (control variable update)
+                this.emit(this.OP.PUSH_LOCAL, nameSlots[0]);
+                this.emit(this.OP.STORE_LOCAL, varSlot);
+
+                // body
+                node.body.forEach(s => this.visit(s));
+
+                // jump back
+                this.emit(this.OP.JMP, loopStart);
+                this.instructions[exitJmp].arg = this.instructions.length;
+                this.popBreakTarget(this.instructions.length, loopStart);
+            }
+
+            visit_LocalFunction(node) {
+                const name = node.name || (node.nameParts && node.nameParts[0]);
+                const slot = this.declareLocal(name);
+                this.compileFunction(node.func, slot, null, false, name);
+            }
+
+            visit_GlobalFunction(node) {
+                this.compileFunction(node.func, null, node.name, false, null);
+            }
+
+            visit_FunctionDeclaration(node) {
+                this.compileFunction(node, null, null, true, null);
+            }
+
+            compileFunction(funcNode, localSlot, globalName, isExpr = false, recursiveName = null) {
+                const savedInstructions = this.instructions;
+                const savedLocalCount = this.localCount;
+                const savedScopes = this.scopes;
+                const savedBreakStack = this.breakStack;
+                const savedContinueStack = this.continueStack;
+
+                // Make current scopes visible as outer for nested resolution
+                this.outerFuncScopes.push({
+                    scopes: this.scopes.map(m => new Map(m)),
+                    localCount: this.localCount
+                });
+
+                this.instructions = [];
+                this.localCount = 0;
+                this.scopes = [new Map()];
+                this.breakStack = [];
+                this.continueStack = [];
+
+                // For recursive local functions, reserve slot 0 for the function itself
+                let selfSlot = -1;
+                if (recursiveName) {
+                    selfSlot = this.declareLocal(recursiveName);
+                }
+
+                // Parameters follow
+                funcNode.parameters.forEach(p => {
+                    if (p !== '...') this.declareLocal(p);
+                });
+
+                funcNode.body.forEach(s => this.visit(s));
+                this.emit(this.OP.PUSH_CONST, this.addConstant(null));
+                this.emit(this.OP.RET, 0);
+
+                const proto = {
+                    instructions: this.instructions,
+                    constants: this.constants,
+                    numParams: funcNode.parameters.filter(p => p !== '...').length,
+                    selfSlot: selfSlot,
+                    paramOffset: recursiveName ? 1 : 0
+                };
+                const protoIndex = this.functions.length;
+                this.functions.push(proto);
+
+                this.instructions = savedInstructions;
+                this.localCount = savedLocalCount;
+                this.scopes = savedScopes;
+                this.breakStack = savedBreakStack;
+                this.continueStack = savedContinueStack;
+                this.outerFuncScopes.pop();
+
+                this.emit(this.OP.CLOSURE, protoIndex);
+
+                if (localSlot !== null && localSlot !== undefined) {
+                    this.emit(this.OP.STORE_LOCAL, localSlot);
+                } else if (globalName) {
+                    this.emit(this.OP.STORE_GLOBAL, this.addConstant(globalName));
+                }
+            }
+
+            visit_DoStatement(node) {
+                this.pushScope();
+                node.body.forEach(s => this.visit(s));
+                this.popScope();
+            }
+
+            visit_BreakStatement() {
+                if (this.breakStack.length === 0) {
+                    throw new Error('break statement outside of a loop');
+                }
+                const jmpIdx = this.emit(this.OP.JMP, 0);
+                this.breakStack[this.breakStack.length - 1].push(jmpIdx);
+            }
+
+            visit_ContinueStatement() {
+                if (this.continueStack.length === 0) {
+                    throw new Error('continue statement outside of a loop');
+                }
+                const jmpIdx = this.emit(this.OP.JMP, 0);
+                this.continueStack[this.continueStack.length - 1].push(jmpIdx);
+            }
+
+            visit_LabelStatement(node) {
+                this.labels.set(node.label, this.instructions.length);
+            }
+
+            visit_GotoStatement(node) {
+                const idx = this.emit(this.OP.JMP, 0);
+                this.gotoPending.push({ idx, label: node.label });
+            }
+
+            visit_TypeStatement() {
+                // Runtime no-op — types are erased
+            }
+
+            visit_VarargExpression() {
+                this.emit(this.OP.VARARG);
+            }
+        }
+
+        /* ================================================================
+         *  VM BUILDER – correct IP, call frames, handlers, encryption
+         * ================================================================ */
+        class VMBuilder {
+            constructor(ir, config) {
+                this.ir = ir;
+                this.config = config;
+                this.varNames = {
+                    stack: Utils.generateIdentifier(),
+                    ip: Utils.generateIdentifier(),
+                    bc: Utils.generateIdentifier(),
+                    consts: Utils.generateIdentifier(),
+                    op: Utils.generateIdentifier(),
+                    arg: Utils.generateIdentifier(),
+                    env: Utils.generateIdentifier(),
+                    locals: Utils.generateIdentifier(),
+                    protos: Utils.generateIdentifier(),
+                    frames: Utils.generateIdentifier(),
+                    top: Utils.generateIdentifier()
+                };
+            }
+
+            // Encode a string as a sequence of byte values that can be rebuilt with string.char
+            encodeStringBytes(str, key) {
+                const bytes = [];
+                for (let i = 0; i < str.length; i++) {
+                    // Use codePointAt to be Unicode-safe; for simplicity we stay in BMP
+                    const code = str.charCodeAt(i);
+                    bytes.push(code ^ key);
+                }
+                return bytes;
+            }
+
+            build() {
+                const realOpMap = this.ir.opMap;
+                const mutatedOpMap = {};
+                const reverseMutatedMap = {};
+
+                // Opcode mutation
+                if (this.config.vmMutation) {
+                    Object.keys(realOpMap).forEach(key => {
+                        let newOp;
+                        do {
+                            newOp = Utils.randInt(20, 250);
+                        } while (reverseMutatedMap[newOp] !== undefined);
+                        mutatedOpMap[realOpMap[key]] = newOp;
+                        reverseMutatedMap[newOp] = key;
+                    });
+                } else {
+                    Object.keys(realOpMap).forEach(key => {
+                        mutatedOpMap[realOpMap[key]] = realOpMap[key];
+                        reverseMutatedMap[realOpMap[key]] = key;
+                    });
+                }
+
+                // Encode bytecode (flat array of op,arg pairs)
+                const encodeInstructions = (instrs) => {
+                    const out = [];
+                    instrs.forEach(inst => {
+                        out.push(mutatedOpMap[inst.op]);
+                        out.push(inst.arg);
+                    });
+                    return out;
+                };
+
+                const mainBC = encodeInstructions(this.ir.instructions);
+
+                // Encode nested function protos
+                const protoBCs = (this.ir.functions || []).map(proto => encodeInstructions(proto.instructions));
+                const protoMeta = (this.ir.functions || []).map(proto => ({
+                    nparams: proto.numParams || 0,
+                    selfSlot: proto.selfSlot !== undefined ? proto.selfSlot : -1,
+                    paramOffset: proto.paramOffset || 0
+                }));
+
+                // Constant encryption – produce a table of numbers (byte arrays) or plain values
+                const constKey = Utils.randInt(1, 255);
+                const encodedConsts = [];
+                const constTypes = []; // 0 = nil, 1 = boolean, 2 = number, 3 = string (encrypted)
+
+                this.ir.constants.forEach(c => {
+                    if (c === null || c === undefined) {
+                        encodedConsts.push(0);
+                        constTypes.push(0);
+                    } else if (typeof c === 'boolean') {
+                        encodedConsts.push(c ? 1 : 0);
+                        constTypes.push(1);
+                    } else if (typeof c === 'number') {
+                        encodedConsts.push(c);
+                        constTypes.push(2);
+                    } else if (typeof c === 'string') {
+                        const bytes = this.encodeStringBytes(c, constKey);
+                        encodedConsts.push('{' + bytes.join(',') + '}');
+                        constTypes.push(3);
+                    } else {
+                        // fallback
+                        encodedConsts.push(0);
+                        constTypes.push(0);
+                    }
+                });
+
+                // Handlers
+                let handlers = Object.keys(reverseMutatedMap).map(mutOp => ({
+                    op: Number(mutOp),
+                    name: reverseMutatedMap[mutOp],
+                    code: this.generateHandlerCode(reverseMutatedMap[mutOp])
+                }));
+
+                if (this.config.vmShuffle) {
+                    for (let i = handlers.length - 1; i > 0; i--) {
+                        const j = Math.floor(Utils.rng() * (i + 1));
+                        [handlers[i], handlers[j]] = [handlers[j], handlers[i]];
+                    }
+                }
+
+                // Build source
+                let src = `-- Obfuscated via VORTEX Opx (seed-aware)\n`;
+                src += `-- Compatible with Lua 5.1 / Luau\n`;
+
+                // Constants
+                if (this.config.vmConstants) {
+                    src += `local ${this.varNames.consts} = {}\n`;
+                    src += `do\n`;
+                    src += `  local _k = ${constKey}\n`;
+                    src += `  local _raw = {${encodedConsts.join(',')}}\n`;
+                    src += `  local _ty = {${constTypes.join(',')}}\n`;
+                    src += `  for i = 1, #_raw do\n`;
+                    src += `    local t = _ty[i]\n`;
+                    src += `    if t == 0 then ${this.varNames.consts}[i] = nil\n`;
+                    src += `    elseif t == 1 then ${this.varNames.consts}[i] = (_raw[i] == 1)\n`;
+                    src += `    elseif t == 2 then ${this.varNames.consts}[i] = _raw[i]\n`;
+                    src += `    elseif t == 3 then\n`;
+                    src += `      local b = _raw[i]\n`;
+                    src += `      local s = ""\n`;
+                    src += `      for j = 1, #b do local c=b[j] if bit32 then c=bit32.bxor(c,_k) else local x,y,r,p=c,_k,0,1 for _=1,8 do if x%2~=y%2 then r=r+p end x=math.floor(x/2) y=math.floor(y/2) p=p*2 end c=r end s=s..string.char(c) end\n`;
+                    src += `      ${this.varNames.consts}[i] = s\n`;
+                    src += `    end\n`;
+                    src += `  end\n`;
+                    src += `end\n`;
+                } else {
+                    // plain constants
+                    const plain = this.ir.constants.map(c => {
+                        if (c === null) return 'nil';
+                        if (typeof c === 'string') return this.luaStringLiteral(c);
+                        if (typeof c === 'boolean') return c ? 'true' : 'false';
+                        return String(c);
+                    });
+                    src += `local ${this.varNames.consts} = {${plain.join(',')}}\n`;
+                }
+
+                // Bytecode + protos
+                src += `local ${this.varNames.bc} = {${mainBC.join(',')}}\n`;
+                src += `local ${this.varNames.protos} = {\n`;
+                protoBCs.forEach((pbc, i) => {
+                    const m = protoMeta[i];
+                    src += `  {bc={${pbc.join(',')}}, nparams=${m.nparams}, selfSlot=${m.selfSlot}, paramOffset=${m.paramOffset}},\n`;
+                });
+                src += `}\n`;
+
+                // Environment – bind each global in its own pcall so one missing name cannot wipe the rest
+                src += `local ${this.varNames.env}\n`;
+                src += `do\n`;
+                src += `  local e = {}\n`;
+                src += `  local function trybind(name, getter)\n`;
+                src += `    local ok, val = pcall(getter)\n`;
+                src += `    if ok and val ~= nil then e[name] = val end\n`;
+                src += `  end\n`;
+                src += `  trybind("print", function() return print end)\n`;
+                src += `  trybind("warn", function() return warn end)\n`;
+                src += `  trybind("error", function() return error end)\n`;
+                src += `  trybind("pcall", function() return pcall end)\n`;
+                src += `  trybind("xpcall", function() return xpcall end)\n`;
+                src += `  trybind("pairs", function() return pairs end)\n`;
+                src += `  trybind("ipairs", function() return ipairs end)\n`;
+                src += `  trybind("next", function() return next end)\n`;
+                src += `  trybind("select", function() return select end)\n`;
+                src += `  trybind("type", function() return type end)\n`;
+                src += `  trybind("typeof", function() return typeof end)\n`;
+                src += `  trybind("tostring", function() return tostring end)\n`;
+                src += `  trybind("tonumber", function() return tonumber end)\n`;
+                src += `  trybind("string", function() return string end)\n`;
+                src += `  trybind("table", function() return table end)\n`;
+                src += `  trybind("math", function() return math end)\n`;
+                src += `  trybind("bit32", function() return bit32 end)\n`;
+                src += `  trybind("coroutine", function() return coroutine end)\n`;
+                src += `  trybind("os", function() return os end)\n`;
+                src += `  trybind("debug", function() return debug end)\n`;
+                src += `  trybind("utf8", function() return utf8 end)\n`;
+                src += `  trybind("setmetatable", function() return setmetatable end)\n`;
+                src += `  trybind("getmetatable", function() return getmetatable end)\n`;
+                src += `  trybind("rawget", function() return rawget end)\n`;
+                src += `  trybind("rawset", function() return rawset end)\n`;
+                src += `  trybind("rawequal", function() return rawequal end)\n`;
+                src += `  trybind("rawlen", function() return rawlen end)\n`;
+                src += `  trybind("require", function() return require end)\n`;
+                src += `  trybind("_G", function() return _G end)\n`;
+                src += `  trybind("unpack", function() return unpack or table.unpack end)\n`;
+                // Executor / loadstring environments (Synapse, Script-Ware, etc.)
+                src += `  trybind("loadstring", function() return loadstring end)\n`;
+                src += `  trybind("load", function() return load end)\n`;
+                src += `  trybind("getfenv", function() return getfenv end)\n`;
+                src += `  trybind("setfenv", function() return setfenv end)\n`;
+                src += `  trybind("newproxy", function() return newproxy end)\n`;
+                src += `  trybind("getgenv", function() return getgenv end)\n`;
+                src += `  trybind("getrenv", function() return getrenv end)\n`;
+                src += `  trybind("getreg", function() return getreg end)\n`;
+                src += `  trybind("getsenv", function() return getsenv end)\n`;
+                src += `  trybind("getrawmetatable", function() return getrawmetatable end)\n`;
+                src += `  trybind("setrawmetatable", function() return setrawmetatable end)\n`;
+                src += `  trybind("setreadonly", function() return setreadonly end)\n`;
+                src += `  trybind("isreadonly", function() return isreadonly end)\n`;
+                src += `  trybind("hookfunction", function() return hookfunction end)\n`;
+                src += `  trybind("hookmetamethod", function() return hookmetamethod end)\n`;
+                src += `  trybind("newcclosure", function() return newcclosure end)\n`;
+                src += `  trybind("checkcaller", function() return checkcaller end)\n`;
+                src += `  trybind("islclosure", function() return islclosure end)\n`;
+                src += `  trybind("iscclosure", function() return iscclosure end)\n`;
+                src += `  trybind("clonefunction", function() return clonefunction end)\n`;
+                src += `  trybind("getnamecallmethod", function() return getnamecallmethod end)\n`;
+                src += `  trybind("identifyexecutor", function() return identifyexecutor end)\n`;
+                src += `  trybind("request", function() return request or http_request or (http and http.request) end)\n`;
+                src += `  trybind("http_request", function() return http_request end)\n`;
+                src += `  trybind("http", function() return http end)\n`;
+                src += `  trybind("syn", function() return syn end)\n`;
+                src += `  trybind("crypt", function() return crypt end)\n`;
+                src += `  trybind("base64_encode", function() return base64_encode end)\n`;
+                src += `  trybind("base64_decode", function() return base64_decode end)\n`;
+                src += `  trybind("isfolder", function() return isfolder end)\n`;
+                src += `  trybind("makefolder", function() return makefolder end)\n`;
+                src += `  trybind("isfile", function() return isfile end)\n`;
+                src += `  trybind("readfile", function() return readfile end)\n`;
+                src += `  trybind("writefile", function() return writefile end)\n`;
+                src += `  trybind("appendfile", function() return appendfile end)\n`;
+                src += `  trybind("listfiles", function() return listfiles end)\n`;
+                src += `  trybind("delfile", function() return delfile end)\n`;
+                src += `  trybind("delfolder", function() return delfolder end)\n`;
+                src += `  trybind("Drawing", function() return Drawing end)\n`;
+                src += `  trybind("WebSocket", function() return WebSocket end)\n`;
+                src += `  trybind("game", function() return game end)\n`;
+                src += `  trybind("workspace", function() return workspace end)\n`;
+                src += `  trybind("script", function() return script end)\n`;
+                src += `  trybind("plugin", function() return plugin end)\n`;
+                src += `  trybind("shared", function() return shared end)\n`;
+                src += `  trybind("Enum", function() return Enum end)\n`;
+                src += `  trybind("Instance", function() return Instance end)\n`;
+                src += `  trybind("Axes", function() return Axes end)\n`;
+                src += `  trybind("BrickColor", function() return BrickColor end)\n`;
+                src += `  trybind("CFrame", function() return CFrame end)\n`;
+                src += `  trybind("Color3", function() return Color3 end)\n`;
+                src += `  trybind("ColorSequence", function() return ColorSequence end)\n`;
+                src += `  trybind("ColorSequenceKeypoint", function() return ColorSequenceKeypoint end)\n`;
+                src += `  trybind("DateTime", function() return DateTime end)\n`;
+                src += `  trybind("Faces", function() return Faces end)\n`;
+                src += `  trybind("Font", function() return Font end)\n`;
+                src += `  trybind("NumberRange", function() return NumberRange end)\n`;
+                src += `  trybind("NumberSequence", function() return NumberSequence end)\n`;
+                src += `  trybind("NumberSequenceKeypoint", function() return NumberSequenceKeypoint end)\n`;
+                src += `  trybind("OverlapParams", function() return OverlapParams end)\n`;
+                src += `  trybind("PathWaypoint", function() return PathWaypoint end)\n`;
+                src += `  trybind("PhysicalProperties", function() return PhysicalProperties end)\n`;
+                src += `  trybind("Random", function() return Random end)\n`;
+                src += `  trybind("Ray", function() return Ray end)\n`;
+                src += `  trybind("RaycastParams", function() return RaycastParams end)\n`;
+                src += `  trybind("Rect", function() return Rect end)\n`;
+                src += `  trybind("Region3", function() return Region3 end)\n`;
+                src += `  trybind("Region3int16", function() return Region3int16 end)\n`;
+                src += `  trybind("TweenInfo", function() return TweenInfo end)\n`;
+                src += `  trybind("UDim", function() return UDim end)\n`;
+                src += `  trybind("UDim2", function() return UDim2 end)\n`;
+                src += `  trybind("Vector2", function() return Vector2 end)\n`;
+                src += `  trybind("Vector2int16", function() return Vector2int16 end)\n`;
+                src += `  trybind("Vector3", function() return Vector3 end)\n`;
+                src += `  trybind("Vector3int16", function() return Vector3int16 end)\n`;
+                src += `  trybind("tick", function() return tick end)\n`;
+                src += `  trybind("time", function() return time end)\n`;
+                src += `  trybind("wait", function() return wait end)\n`;
+                src += `  trybind("delay", function() return delay end)\n`;
+                src += `  trybind("spawn", function() return spawn end)\n`;
+                src += `  trybind("task", function() return task end)\n`;
+                src += `  trybind("settings", function() return settings end)\n`;
+                src += `  trybind("UserSettings", function() return UserSettings end)\n`;
+                src += `  trybind("newproxy", function() return newproxy end)\n`;
+                src += `  ${this.varNames.env} = setmetatable(e, {\n`;
+                src += `    __index = function(_, k)\n`;
+                src += `      if type(_G) == "table" then\n`;
+                src += `        local v = _G[k]\n`;
+                src += `        if v ~= nil then return v end\n`;
+                src += `      end\n`;
+                src += `      return nil\n`;
+                src += `    end,\n`;
+                src += `    __newindex = function(_, k, v)\n`;
+                src += `      rawset(e, k, v)\n`;
+                src += `      if type(_G) == "table" then _G[k] = v end\n`;
+                src += `    end\n`;
+                src += `  })\n`;
+                src += `end\n`;
+                src += `local _unpack = table.unpack or unpack\n`;
+
+                // Shared run function – executes a bytecode array with its own locals/stack
+                // Fixed name so CLOSURE handlers can close over it
+                src += `local __vm_run\n`;
+                src += `__vm_run = function(code, args, selfFn, paramOffset, parentLocals)\n`;
+                src += `  local ${this.varNames.locals} = setmetatable({}, { __index = parentLocals })\n`;
+                src += `  local ${this.varNames.stack} = {}\n`;
+                src += `  local ${this.varNames.ip} = 1\n`;
+                src += `  local off = paramOffset or 0\n`;
+                src += `  if selfFn then rawset(${this.varNames.locals}, 0, selfFn) end\n`;
+                src += `  if args then for i=1,#args do rawset(${this.varNames.locals}, off+i-1, args[i]) end end\n`;
+                src += `  local bc = code\n`;
+
+                if (this.config.vmDispatcher && this.config.vmMode === 'supermax') {
+                    const a = Utils.randInt(2, 9);
+                    const b = a * a;
+                    src += `  while ((${a}*${a}-${b})==0) do\n`;
+                } else {
+                    src += `  while true do\n`;
+                }
+
+                src += `    if ${this.varNames.ip} > #bc then break end\n`;
+                src += `    local ${this.varNames.op} = bc[${this.varNames.ip}]\n`;
+                src += `    local ${this.varNames.arg} = bc[${this.varNames.ip}+1]\n`;
+                src += `    ${this.varNames.ip} = ${this.varNames.ip}+2\n`;
+
+                let first = true;
+                handlers.forEach(h => {
+                    src += `    ${first ? 'if' : 'elseif'} ${this.varNames.op} == ${h.op} then\n`;
+                    // Indent handler code one more level
+                    src += h.code.split('\n').map(l => '      ' + l).join('\n') + '\n';
+                    first = false;
+                });
+                src += `    else break end\n`;
+                src += `  end\n`;
+                src += `  return ${this.varNames.stack}[#${this.varNames.stack}]\n`;
+                src += `end\n`;
+
+                // Run main chunk
+                src += `__vm_run(${this.varNames.bc}, nil)\n`;
+
+                return src;
+            }
+
+            luaStringLiteral(s) {
+                // Produce a safe Lua long-string or escaped short string
+                if (s.indexOf('\0') === -1 && s.indexOf(']]') === -1) {
+                    return '[[' + s + ']]';
+                }
+                // fallback to byte table reconstruction later; for plain mode use escapes
+                let out = '"';
+                for (let i = 0; i < s.length; i++) {
+                    const c = s.charCodeAt(i);
+                    if (c === 10) out += '\\n';
+                    else if (c === 9) out += '\\t';
+                    else if (c === 13) out += '\\r';
+                    else if (c === 34) out += '\\"';
+                    else if (c === 92) out += '\\\\';
+                    else if (c < 32 || c > 126) out += '\\' + c;
+                    else out += s[i];
+                }
+                return out + '"';
+            }
+
+            generateHandlerCode(opName) {
+                const S = this.varNames.stack;
+                const A = this.varNames.arg;
+                const C = this.varNames.consts;
+                const E = this.varNames.env;
+                const L = this.varNames.locals;
+                const IP = this.varNames.ip;
+                const P = this.varNames.protos;
+
+                switch (opName) {
+                    case 'PUSH_CONST':
+                        return `${S}[#${S}+1] = ${C}[${A}+1]`;
+                    case 'PUSH_LOCAL':
+                        return `do local raw=${A} local depth=math.floor(raw/10000) local slot=raw%10000 local _t=${L} for _=1,depth do local mt=getmetatable(_t) _t=(mt and mt.__index) or _t end ${S}[#${S}+1]=_t[slot] end`;
+                    case 'PUSH_GLOBAL':
+                        return `do local _n=${C}[${A}+1] local _v=${E}[_n] if _v==nil and type(_G)=="table" then _v=_G[_n] end if _v==nil then warn("[VORTEX] nil global: "..tostring(_n)) end ${S}[#${S}+1]=_v end`;
+                    case 'STORE_LOCAL':
+                        // arg encodes slot + depth*10000 for upvalue writes (depth 0 = local)
+                        return `do local raw=${A} local depth=math.floor(raw/10000) local slot=raw%10000 local _v=table.remove(${S}) local _t=${L} for _=1,depth do local mt=getmetatable(_t) _t=mt and mt.__index or _t end rawset(_t,slot,_v) end`;
+                    case 'STORE_GLOBAL':
+                        return `${E}[${C}[${A}+1]] = table.remove(${S})`;
+                    case 'ADD':
+                        return `local b=table.remove(${S}) local a=table.remove(${S}) ${S}[#${S}+1]=a+b`;
+                    case 'SUB':
+                        return `local b=table.remove(${S}) local a=table.remove(${S}) ${S}[#${S}+1]=a-b`;
+                    case 'MUL':
+                        return `local b=table.remove(${S}) local a=table.remove(${S}) ${S}[#${S}+1]=a*b`;
+                    case 'DIV':
+                        return `local b=table.remove(${S}) local a=table.remove(${S}) ${S}[#${S}+1]=a/b`;
+                    case 'MOD':
+                        return `local b=table.remove(${S}) local a=table.remove(${S}) ${S}[#${S}+1]=a%b`;
+                    case 'POW':
+                        return `local b=table.remove(${S}) local a=table.remove(${S}) ${S}[#${S}+1]=a^b`;
+                    case 'EQ':
+                        return `local b=table.remove(${S}) local a=table.remove(${S}) ${S}[#${S}+1]=(a==b)`;
+                    case 'NEQ':
+                        return `local b=table.remove(${S}) local a=table.remove(${S}) ${S}[#${S}+1]=(a~=b)`;
+                    case 'LT':
+                        return `local b=table.remove(${S}) local a=table.remove(${S}) ${S}[#${S}+1]=(a<b)`;
+                    case 'GT':
+                        return `local b=table.remove(${S}) local a=table.remove(${S}) ${S}[#${S}+1]=(a>b)`;
+                    case 'LTE':
+                        return `local b=table.remove(${S}) local a=table.remove(${S}) ${S}[#${S}+1]=(a<=b)`;
+                    case 'GTE':
+                        return `local b=table.remove(${S}) local a=table.remove(${S}) ${S}[#${S}+1]=(a>=b)`;
+                    case 'CONCAT':
+                        return `local b=table.remove(${S}) local a=table.remove(${S}) ${S}[#${S}+1]=tostring(a)..tostring(b)`;
+                    case 'NOT':
+                        return `${S}[#${S}] = not ${S}[#${S}]`;
+                    case 'NEG':
+                        return `${S}[#${S}] = -${S}[#${S}]`;
+                    case 'LEN':
+                        return `${S}[#${S}] = #${S}[#${S}]`;
+                    case 'JMP':
+                        return `${IP} = ${A} * 2 + 1`;
+                    case 'JMPF':
+                        return `if not table.remove(${S}) then ${IP} = ${A} * 2 + 1 end`;
+                    case 'JMPT':
+                        return `if table.remove(${S}) then ${IP} = ${A} * 2 + 1 end`;
+                    case 'NEW_TABLE':
+                        return `${S}[#${S}+1] = {}`;
+                    case 'GET_TABLE':
+                        return `local k=table.remove(${S}) local t=table.remove(${S}) if t==nil then error("attempt to index nil with '"..tostring(k).."'", 0) end local _gv=t[k] if _gv==nil then warn("[VORTEX] nil index: "..tostring(k).." on "..(typeof and typeof(t) or type(t))) end ${S}[#${S}+1]=_gv`;
+                    case 'SET_TABLE':
+                        return `local v=table.remove(${S}) local k=table.remove(${S}) local t=${S}[#${S}] if t then t[k]=v end`;
+                    case 'CALL':
+                        return `local raw=${A} local nRets=0 local n=raw if raw>=1000 then nRets=math.floor(raw/1000) n=raw%1000 end local args={} for i=1,n do args[n-i+1]=table.remove(${S}) end local fn=table.remove(${S}) if type(fn)~="function" then local mt=type(fn)=="table" and getmetatable(fn) if not(mt and mt.__call) then error("VM CALL: attempt to call a "..type(fn).." value (nargs="..tostring(n)..", stack="..tostring(#${S})..")", 0) end end if nRets>0 then local rets={fn(_unpack(args))} for i=1,nRets do ${S}[#${S}+1]=rets[i] end else local r=fn(_unpack(args)) ${S}[#${S}+1]=r end`;
+                    case 'RET':
+                        return `${IP} = #bc + 2`;
+                    case 'RET_MR':
+                        // Multi-return: return from __vm_run with all values (unlimited)
+                        return `do local n=${A} local rets={} for i=1,math.max(n,1) do rets[n-i+1]=table.remove(${S}) end return _unpack(rets) end`;
+                    case 'CLOSURE':
+                        return `${S}[#${S}+1]=(function(protoIdx, parentLoc) local proto=${P}[protoIdx+1] local fn; fn=function(...) local a={...} return __vm_run(proto.bc, a, fn, proto.paramOffset, parentLoc) end return fn end)(${A}, ${L})`;
+                    case 'MOVE':
+                        return `${S}[#${S}+1] = ${S}[#${S}]`;
+                    case 'VARARG':
+                        return `${S}[#${S}+1] = nil`;
+                    case 'CO_CREATE':
+                        return `${S}[#${S}+1]=coroutine.create(table.remove(${S}))`;
+                    case 'CO_RESUME':
+                        return `do local co=table.remove(${S}) local ok,r=coroutine.resume(co) ${S}[#${S}+1]=ok ${S}[#${S}+1]=r end`;
+                    case 'CO_YIELD':
+                        return `do local v=table.remove(${S}) ${S}[#${S}+1]=coroutine.yield(v) end`;
+                    case 'CO_STATUS':
+                        return `${S}[#${S}+1]=coroutine.status(table.remove(${S}))`;
+                    default:
+                        return `-- unimplemented ${opName}`;
+                }
+            }
+        }
+
+        /* ================================================================
+         *  AST TRANSFORMER (VM disabled / Safe mode)
+         * ================================================================ */
+        class ASTTransformer {
+            constructor(ast, config, originalSource) {
+                this.ast = ast;
+                this.config = config;
+                this.originalSource = originalSource;
+            }
+
+            // Source-level obfuscation that preserves 100% Roblox/Luau semantics
+            generate() {
+                const cfg = this.config;
+                let src = this.originalSource;
+
+                // Keep Luau type annotations in source mode (valid Luau; erased at runtime).
+                // VM mode parses and ignores them via skipTypeAnnotation.
+
+                // 2) Build decryptor + encrypt string literals
+                const key1 = Utils.randInt(1, 250);
+                const key2 = Utils.randInt(1, 250);
+                const decName = Utils.generateIdentifier();
+                const strings = [];
+
+                const encryptStr = (s) => {
+                    const bytes = [];
+                    for (let i = 0; i < s.length; i++) {
+                        let c = s.charCodeAt(i);
+                        c = (c ^ key1) & 0xFF;
+                        c = (c + key2) & 0xFF;
+                        bytes.push(c);
+                    }
+                    const idx = strings.length;
+                    strings.push(bytes);
+                    return `${decName}(${idx})`;
+                };
+
+                // Replace short/long string literals carefully via lexer tokens
+                try {
+                    const lexer = new LuaLexer(src);
+                    const tokens = lexer.tokenize();
+                    let out = '';
+                    let lastPos = 0;
+                    // We rebuild from original by substituting String tokens
+                    // Simpler approach: regex for common strings (good enough for Roblox scripts)
+                } catch (e) { /* fall through */ }
+
+                // String literal encryption (double/single quotes)
+                if (cfg.strings) {
+                    src = src.replace(/"(?:[^"\\]|\\[\s\S])*"|'(?:[^'\\]|\\[\s\S])*'/g, (m) => {
+                        // Skip empty
+                        if (m.length <= 2) return m;
+                        const quote = m[0];
+                        let raw = m.slice(1, -1);
+                        // Unescape basic sequences for storage
+                        raw = raw.replace(/\\n/g, '\n').replace(/\\t/g, '\t').replace(/\\r/g, '\r')
+                                 .replace(/\\'/g, "'").replace(/\\"/g, '"').replace(/\\\\/g, '\\');
+                        return encryptStr(raw);
+                    });
+                    // Long strings [[...]]
+                    src = src.replace(/\[(=*)\[([\s\S]*?)\]\1\]/g, (m, eq, content) => {
+                        if (content.length === 0) return m;
+                        return encryptStr(content);
+                    });
+                }
+
+                // 3) Number obfuscation
+                if (cfg.numbers) {
+                    src = src.replace(/\b(\d+\.?\d*)\b/g, (m) => {
+                        const n = parseFloat(m);
+                        if (!isFinite(n) || n > 1e9 || m.length > 8) return m;
+                        if (n === 0) return '(0)';
+                        const a = Utils.randInt(1, 50);
+                        const b = n + a;
+                        return `(${b}-${a})`;
+                    });
+                }
+
+                // 4) Build preamble: decryptor + string pool + anti-tamper
+                let pre = `-- Protected via VORTEX Opx (secure source transform)\n`;
+                pre += `-- Roblox / Luau compatible · seed-aware\n`;
+
+                if (cfg.strings && strings.length > 0) {
+                    pre += `local ${decName}\n`;
+                    pre += `do\n`;
+                    pre += `  local _k1, _k2 = ${key1}, ${key2}\n`;
+                    pre += `  local _pool = {\n`;
+                    strings.forEach((b, i) => {
+                        pre += `    {${b.join(',')}},\n`;
+                    });
+                    pre += `  }\n`;
+                    pre += `  local _cache = {}\n`;
+                    pre += `  ${decName} = function(i)\n`;
+                    pre += `    if _cache[i] then return _cache[i] end\n`;
+                    pre += `    local b = _pool[i+1]\n`;
+                    pre += `    if not b then return "" end\n`;
+                    pre += `    local s = table.create and table.create(#b) or {}\n`;
+                    pre += `    for j = 1, #b do\n`;
+                    pre += `      local c = b[j]\n`;
+                    pre += `      c = (c - _k2) % 256\n`;
+                    pre += `      if c < 0 then c = c + 256 end\n`;
+                    pre += `      c = bit32 and bit32.bxor(c, _k1) or (function(x,y) local r,p=0,1 for _=1,8 do if x%2~=y%2 then r=r+p end x=math.floor(x/2) y=math.floor(y/2) p=p*2 end return r end)(c, _k1)\n`;
+                    pre += `      s[j] = string.char(c)\n`;
+                    pre += `    end\n`;
+                    pre += `    s = table.concat(s)\n`;
+                    pre += `    _cache[i] = s\n`;
+                    pre += `    return s\n`;
+                    pre += `  end\n`;
+                    pre += `end\n`;
+                }
+
+                // Anti-tamper / environment checks (Roblox)
+                if (cfg.opaque || cfg.vmMode === 'supermax' || cfg.slow) {
+                    const a = Utils.randInt(2, 9);
+                    pre += `do local _t=tick or os.clock; local _a=${a}; if (_a*_a)-(${a*a}) ~= 0 then return end end\n`;
+                }
+
+                // Junk locals — more in Slow mode
+                if (cfg.deadcode || cfg.slow) {
+                    const junkN = cfg.slow ? Utils.randInt(8, 16) : Utils.randInt(2, 5);
+                    for (let i = 0; i < junkN; i++) {
+                        const v = Utils.generateIdentifier();
+                        pre += `local ${v}=${Utils.randInt(0,999)}\n`;
+                    }
+                }
+
+                // Slow mode: extra opaque decoy functions (never called)
+                if (cfg.slow) {
+                    for (let i = 0; i < Utils.randInt(2, 4); i++) {
+                        const fn = Utils.generateIdentifier();
+                        const a = Utils.randInt(2, 9);
+                        pre += `local function ${fn}(...)\n`;
+                        pre += `  local _x=${a}\n`;
+                        pre += `  if (_x*_x)-(${a*a})~=0 then return nil end\n`;
+                        pre += `  return select('#',...)\n`;
+                        pre += `end\n`;
+                    }
+                    pre += `-- VORTEX Slow pass · heavy multi-layer\n`;
+                }
+
+                return pre + src;
+            }
+        }
+
+        /* ================================================================
+         *  INTERNAL TEST SUITE
+         * ================================================================ */
+        const TestSuite = {
+            async runAll() {
+                const cases = [
+                    { name: 'arithmetic', src: 'local a=1+2*3-4; return a' },
+                    { name: 'variables', src: 'local x=10; local y=x+5; return y' },
+                    { name: 'strings', src: 'local s="hello"; return s' },
+                    { name: 'booleans', src: 'local t=true; local f=false; return t' },
+                    { name: 'if', src: 'local x=1; if x==1 then return 42 else return 0 end' },
+                    { name: 'if-else', src: 'local x=0; if x==1 then return 1 else return 2 end' },
+                    { name: 'while', src: 'local i=0; while i<3 do i=i+1 end; return i' },
+                    { name: 'function', src: 'local function f(a) return a*2 end; return f(21)' },
+                    { name: 'local function recursive', src: 'local function fact(n) if n==0 then return 1 end return n*fact(n-1) end; return fact(5)' },
+                    { name: 'table', src: 'local t={a=1,b=2}; return t.a+t.b' },
+                    { name: 'table index', src: 'local t={10,20,30}; return t[2]' },
+                    { name: 'member access', src: 'local t={x=99}; return t.x' },
+                    { name: 'comparison', src: 'return (3<5) and (5>=5) and (1~=2)' },
+                    { name: 'logical', src: 'return (false or true) and (true and true)' },
+                    { name: 'unary', src: 'return -(-5) and #( {1,2,3} )' },
+                    { name: 'hex number', src: 'return 0xFF' },
+                    { name: 'concat', src: 'return "a".."b".."c"' },
+                    { name: 'long string', src: 'return [[hello\nworld]]' },
+                    { name: 'comment', src: '-- comment\nreturn 1 -- another' },
+                    { name: 'multiple args', src: 'local function add(a,b) return a+b end; return add(10,32)' },
+                    { name: 'for numeric', src: 'local s=0; for i=1,5 do s=s+i end; return s' },
+                    { name: 'for generic pairs', src: 'local t={a=1,b=2} local s=0; for k,v in pairs(t) do s=s+v end; return s' },
+                    { name: 'for generic ipairs', src: 'local t={10,20,30} local s=0; for i,v in ipairs(t) do s=s+v end; return s' },
+                    { name: 'break while', src: 'local i=0; while true do i=i+1; if i>=3 then break end end; return i' },
+                    { name: 'break for', src: 'local s=0; for i=1,10 do s=s+i; if i==3 then break end end; return s' },
+                ];
+
+                const results = [];
+                for (const c of cases) {
+                    try {
+                        // Test lexer + parser
+                        const lexer = new LuaLexer(c.src);
+                        const tokens = lexer.tokenize();
+                        const parser = new LuaParser(tokens);
+                        const ast = parser.parse();
+                        if (!ast || ast.type !== 'Chunk') throw new Error('AST not a Chunk');
+
+                        // Test VM compile (does not execute Lua, just ensures no throw)
+                        const compiler = new VMCompiler(ast, {
+                            vmMode: 'supermax', deadcode: false, vmMutation: true,
+                            vmConstants: true, vmShuffle: true, vmDispatcher: true
+                        });
+                        const ir = compiler.compile();
+                        if (!ir.instructions || ir.instructions.length === 0) {
+                            throw new Error('No instructions generated');
+                        }
+                        const builder = new VMBuilder(ir, {
+                            vmMode: 'supermax', vmMutation: true, vmConstants: true,
+                            vmShuffle: true, vmDispatcher: true
+                        });
+                        const out = builder.build();
+                        if (!out || out.length < 50) throw new Error('VM output too short');
+
+                        results.push({ name: c.name, ok: true });
+                    } catch (e) {
+                        results.push({ name: c.name, ok: false, error: e.message });
+                    }
+                }
+                return results;
+            }
+        };
+
+        window.addEventListener('DOMContentLoaded', () => {
+            UI.initMonaco();
+            UI.generateSeed();
+            UI.loadPreset('strong');
+            const sel = document.getElementById('preset-selector');
+            if (sel) sel.value = 'strong';
+            Utils.toast('Vortex Engine Loaded. Strong mode ready (full Roblox support).', 'info');
+        });
+    </script>
+</body>
+</html>
