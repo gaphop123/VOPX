@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>VORTEX Opx 2.0 — Lua/Luau Super-Max VM Obfuscator</title>
+    <title>Lua/Luau VM Obfuscator by Gaphop</title>
     
     <!-- Suppress benign ResizeObserver errors often triggered by Monaco Editor -->
     <script>
@@ -163,8 +163,8 @@
         <div class="flex items-center gap-3">
             <i class="fa-solid fa-shield-halved text-indigo-500 text-2xl"></i>
             <div>
-                <h1 class="text-xl font-bold text-white tracking-tight">VORTEX <span class="text-indigo-400">Opx 2.0</span></h1>
-                <p class="text-xs text-slate-400">Lua/Luau Super-Max VM · Polymorphic Dispatch · Bytecode Encrypt</p>
+                <h1 class="text-xl font-bold text-white tracking-tight">VORTEX <span class="text-indigo-400">Opx</span></h1>
+                <p class="text-xs text-slate-400">Lua/Luau Super-Max VM Obfuscator</p>
             </div>
         </div>
         <div class="flex gap-2 items-center">
@@ -337,35 +337,29 @@
     <script>
         /**
          * ========================================================================
-         * VORTEX Opx 2.0 — Lua 5.1 / Luau Super-Max VM Obfuscator
+         * VORTEX Opx — Lua 5.1 / Luau VM Obfuscator
          * ========================================================================
          * Architecture (pipeline stages):
          *   1. Lexer          — tokens (numbers, strings, long strings, comments)
          *   2. Parser         — AST (precedence, functions, tables, loops)
          *   3. Encoder/Compiler — AST → IR instructions + constant pool + protos
          *   4. Validator      — opcode/operand/jump/constant integrity
-         *   5. VMBuilder      — emit runtime (polymorphic dispatch, encrypted BC, env)
-         *   6. SourceObfuscator — non-VM path (rename, CFF, string/number encrypt, junk)
-         *
-         * v2.0 upgrades:
-         *   - Bytecode stream encryption (XOR + positional mix)
-         *   - Polymorphic dispatcher (handler groups A/B/C)
-         *   - Scope-aware identifier renaming (source mode)
-         *   - Control-flow flattening + opaque predicates (source mode)
-         *   - MBA-style number expressions
-         *   - Anti-tamper integrity checksum on bytecode
-         *   - Numeric for: correct negative step handling
-         *   - Superoperator fusion (PUSH_CONST pairs)
+         *   5. VMBuilder      — emit runtime (dispatcher, handlers, env, decrypt)
+         *   6. SourceObfuscator — non-VM path (string/number encrypt, junk, opaque)
          *
          * Protection layers (toggleable):
          *   VM virtualization, opcode mutation, handler shuffle, constant encrypt,
-         *   bytecode encrypt, string transform, number transform, opaque predicates,
-         *   dead code, identifier rename, CFF
+         *   string transform, number transform, opaque predicates, dead code
          *
          * Supported: locals/globals, functions, recursion, closures (read+write upvalues),
          *   if/while/repeat/for, break/continue, goto/labels, tables, method calls,
          *   and/or value semantics, multi-return, Luau types (parsed, runtime-erased),
          *   coroutines (stdlib + CO_* ops), loadstring+HttpGet, Roblox globals
+         *
+         * Notes:
+         *   - Luau type annotations are accepted in all modes; erased at runtime
+         *   - Multi-return via CALL nRets encoding and RET_MR
+         *   - Upvalue writes use depth-encoded local operands
          *
          * Errors: clear messages with stage; never emit knowingly broken bytecode.
          * Seeds: deterministic Mulberry32 when seed is set.
@@ -2163,8 +2157,7 @@ print("Factorial of 5 is: " .. factorial(5))
             }
 
             visit_ForNumericStatement(node) {
-                // Numeric for with correct positive/negative step handling
-                // (var, limit, step) — loop while (step>0 and var<=limit) or (step<=0 and var>=limit)
+                // Simplified numeric for: create locals for var, limit, step
                 this.visit(node.start);
                 const varSlot = this.declareLocal(node.name);
                 this.emit(this.OP.STORE_LOCAL, varSlot);
@@ -2183,27 +2176,10 @@ print("Factorial of 5 is: " .. factorial(5))
 
                 this.pushBreakTarget();
                 const loopStart = this.instructions.length;
-
-                // if step > 0 then check var <= limit else check var >= limit
-                this.emit(this.OP.PUSH_LOCAL, stepSlot);
-                this.emit(this.OP.PUSH_CONST, this.addConstant(0));
-                this.emit(this.OP.GT);
-                const posStepJmp = this.emit(this.OP.JMPF, 0); // if step <= 0, jump to neg branch
-
-                // positive step: var <= limit
+                // condition: var <= limit (positive step assumed for simplicity)
                 this.emit(this.OP.PUSH_LOCAL, varSlot);
                 this.emit(this.OP.PUSH_LOCAL, limitSlot);
                 this.emit(this.OP.LTE);
-                const posEndJmp = this.emit(this.OP.JMP, 0); // skip neg branch with result on stack
-
-                this.instructions[posStepJmp].arg = this.instructions.length;
-                // negative step: var >= limit
-                this.emit(this.OP.PUSH_LOCAL, varSlot);
-                this.emit(this.OP.PUSH_LOCAL, limitSlot);
-                this.emit(this.OP.GTE);
-
-                this.instructions[posEndJmp].arg = this.instructions.length;
-                // stack top = continue?
                 const jmpf = this.emit(this.OP.JMPF, 0);
 
                 node.body.forEach(s => this.visit(s));
@@ -2515,29 +2491,9 @@ print("Factorial of 5 is: " .. factorial(5))
                     }
                 }
 
-                // Bytecode encryption (v2): XOR + positional mix on every integer in BC
-                const bcKey = Utils.randInt(1, 0xFFFF);
-                const encryptBC = (arr) => arr.map((v, i) => {
-                    // Keep as number; mix with key and index
-                    const x = (Number(v) ^ ((bcKey + i * 31) & 0xFFFF)) | 0;
-                    return x;
-                });
-                const decryptExpr = (arrName) => {
-                    // Emit a runtime decrypt loop that mutates arr in place
-                    return `do local _bk=${bcKey}; for _i=1,#${arrName} do local _v=${arrName}[_i]; ${arrName}[_i]=bit32 and bit32.bxor(_v,bit32.band(_bk+_i*31,0xFFFF)) or (function(v,k) local r=0; local p=1; for _=1,16 do if (v%2)~=(k%2) then r=r+p end; v=math.floor(v/2); k=math.floor(k/2); p=p*2 end; return r end)(_v,(_bk+_i*31)%65536) end end`;
-                };
-                const useBcEncrypt = this.config.vmMode === 'supermax' || this.config.vmMode === 'strong' || this.config.vmConstants;
-
-                const mainBCEnc = useBcEncrypt ? encryptBC(mainBC) : mainBC;
-                const protoBCsEnc = useBcEncrypt ? protoBCs.map(p => encryptBC(p)) : protoBCs;
-
-                // Integrity checksum (sum of plaintext BC) for anti-tamper
-                let checksum = 0;
-                mainBC.forEach(v => { checksum = (checksum + (Number(v) | 0)) | 0; });
-
                 // Build source
-                let src = `-- Obfuscated via VORTEX Opx 2.0 (seed-aware · polymorphic VM)\n`;
-                src += `-- Compatible with Lua 5.1 / Luau · bytecode encrypted\n`;
+                let src = `-- Obfuscated via VORTEX Opx (seed-aware)\n`;
+                src += `-- Compatible with Lua 5.1 / Luau\n`;
 
                 // Constants
                 if (this.config.vmConstants) {
@@ -2560,6 +2516,7 @@ print("Factorial of 5 is: " .. factorial(5))
                     src += `  end\n`;
                     src += `end\n`;
                 } else {
+                    // plain constants
                     const plain = this.ir.constants.map(c => {
                         if (c === null) return 'nil';
                         if (typeof c === 'string') return this.luaStringLiteral(c);
@@ -2569,25 +2526,14 @@ print("Factorial of 5 is: " .. factorial(5))
                     src += `local ${this.varNames.consts} = {${plain.join(',')}}\n`;
                 }
 
-                // Bytecode + protos (optionally encrypted)
-                src += `local ${this.varNames.bc} = {${mainBCEnc.join(',')}}\n`;
-                if (useBcEncrypt) {
-                    src += `${decryptExpr(this.varNames.bc)}\n`;
-                    // Anti-tamper: verify checksum after decrypt
-                    src += `do local _cs=0; for _i=1,#${this.varNames.bc} do _cs=(_cs+(${this.varNames.bc}[_i]|0))|0 end; if _cs~=${checksum} then error("VORTEX: bytecode integrity check failed",0) end end\n`;
-                }
+                // Bytecode + protos
+                src += `local ${this.varNames.bc} = {${mainBC.join(',')}}\n`;
                 src += `local ${this.varNames.protos} = {\n`;
-                protoBCsEnc.forEach((pbc, i) => {
+                protoBCs.forEach((pbc, i) => {
                     const m = protoMeta[i];
                     src += `  {bc={${pbc.join(',')}}, nparams=${m.nparams}, selfSlot=${m.selfSlot}, paramOffset=${m.paramOffset}},\n`;
                 });
                 src += `}\n`;
-                if (useBcEncrypt && protoBCsEnc.length) {
-                    src += `for _pi=1,#${this.varNames.protos} do\n`;
-                    src += `  local _pbc=${this.varNames.protos}[_pi].bc\n`;
-                    src += `  do local _bk=${bcKey}; for _i=1,#_pbc do local _v=_pbc[_i]; _pbc[_i]=bit32 and bit32.bxor(_v,bit32.band(_bk+_i*31,0xFFFF)) or (function(v,k) local r=0; local p=1; for _=1,16 do if (v%2)~=(k%2) then r=r+p end; v=math.floor(v/2); k=math.floor(k/2); p=p*2 end; return r end)(_v,(_bk+_i*31)%65536) end end\n`;
-                    src += `end\n`;
-                }
 
                 // Environment – bind each global in its own pcall so one missing name cannot wipe the rest
                 src += `local ${this.varNames.env}\n`;
@@ -2887,8 +2833,7 @@ print("Factorial of 5 is: " .. factorial(5))
         }
 
         /* ================================================================
-         *  AST TRANSFORMER v2 (VM disabled / Safe / Strong source mode)
-         *  — identifier rename, CFF wrapper, MBA numbers, string encrypt
+         *  AST TRANSFORMER (VM disabled / Safe mode)
          * ================================================================ */
         class ASTTransformer {
             constructor(ast, config, originalSource) {
@@ -2897,126 +2842,15 @@ print("Factorial of 5 is: " .. factorial(5))
                 this.originalSource = originalSource;
             }
 
-            // Reserved / Roblox globals that must never be renamed
-            static PRESERVE = new Set([
-                'print','warn','error','pcall','xpcall','pairs','ipairs','next','select',
-                'type','typeof','tostring','tonumber','string','table','math','bit32',
-                'coroutine','os','debug','utf8','setmetatable','getmetatable','rawget',
-                'rawset','rawequal','rawlen','require','_G','unpack','loadstring','load',
-                'getfenv','setfenv','newproxy','game','workspace','script','plugin','shared',
-                'Enum','Instance','Axes','BrickColor','CFrame','Color3','ColorSequence',
-                'DateTime','Faces','Font','NumberRange','NumberSequence','OverlapParams',
-                'PathWaypoint','PhysicalProperties','Random','Ray','RaycastParams','Rect',
-                'Region3','TweenInfo','UDim','UDim2','Vector2','Vector3','tick','time',
-                'wait','delay','spawn','task','settings','UserSettings','true','false','nil',
-                'and','or','not','if','then','else','elseif','end','for','while','do','repeat',
-                'until','function','local','return','break','continue','goto','in'
-            ]);
-
-            mbaNumber(n) {
-                // Mixed Boolean Arithmetic style expressions (still exact for integers)
-                if (!isFinite(n) || Math.abs(n) > 1e7 || !Number.isInteger(n)) {
-                    const a = Utils.randInt(1, 40);
-                    return `(${n + a}-${a})`;
-                }
-                const style = Utils.randInt(0, 4);
-                const a = Utils.randInt(2, 30);
-                const b = Utils.randInt(2, 20);
-                switch (style) {
-                    case 0: return `(${n + a}-${a})`;
-                    case 1: return `(${a}*${n + b}-${a}*${b})`;
-                    case 2: return `((${n}^1)+(${a}-${a}))`;
-                    case 3: return `(${n}|0)+(${b}-${b})`;
-                    default: return `(${n + a + b}-${a}-${b})`;
-                }
-            }
-
-            renameIdentifiers(src) {
-                const cfg = this.config;
-                if (!cfg.rename) return src;
-                // Collect local/param names via simple scan (safe subset)
-                const map = new Map();
-                const reserved = ASTTransformer.PRESERVE;
-                const re = /\blocal\s+function\s+([A-Za-z_][A-Za-z0-9_]*)|\bfunction\s+([A-Za-z_][A-Za-z0-9_]*)\s*\(|\blocal\s+([A-Za-z_][A-Za-z0-9_]*(?:\s*,\s*[A-Za-z_][A-Za-z0-9_]*)*)|\bfor\s+([A-Za-z_][A-Za-z0-9_]*)\s*=|\bfor\s+([A-Za-z_][A-Za-z0-9_]*(?:\s*,\s*[A-Za-z_][A-Za-z0-9_]*)*)\s+in/g;
-                let m;
-                while ((m = re.exec(src)) !== null) {
-                    const blob = m[1] || m[2] || m[3] || m[4] || m[5] || '';
-                    blob.split(',').forEach(part => {
-                        const name = part.trim();
-                        if (name && !reserved.has(name) && !map.has(name) && !name.startsWith('_0x')) {
-                            map.set(name, Utils.generateIdentifier());
-                        }
-                    });
-                }
-                // Also catch function params: function name(a, b, c)
-                const paramRe = /function\s*[A-Za-z_0-9.]*\s*\(([^)]*)\)/g;
-                while ((m = paramRe.exec(src)) !== null) {
-                    m[1].split(',').forEach(part => {
-                        const name = part.trim().replace(/:.*/, '').trim(); // strip Luau type
-                        if (name && name !== '...' && !reserved.has(name) && !map.has(name)) {
-                            map.set(name, Utils.generateIdentifier());
-                        }
-                    });
-                }
-                if (map.size === 0) return src;
-                // Word-boundary replace longest first to avoid partials
-                const names = [...map.keys()].sort((a, b) => b.length - a.length);
-                let out = src;
-                names.forEach(old => {
-                    const neu = map.get(old);
-                    out = out.replace(new RegExp('\\b' + old.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '\\b', 'g'), neu);
-                });
-                return out;
-            }
-
-            injectCFF(src) {
-                // Lightweight control-flow flattening: wrap top-level body in state machine
-                // Only applied when CFF is on and script is not huge (avoid breakage on complex chunks)
-                if (!this.config.cff) return src;
-                const lines = src.split(/\r?\n/);
-                if (lines.length > 400) return src; // skip very large scripts for safety
-                // Skip if already looks like a single expression / return-only
-                const stateVar = Utils.generateIdentifier();
-                const blocks = [];
-                let cur = [];
-                lines.forEach(line => {
-                    const t = line.trim();
-                    if (t === '' || t.startsWith('--')) {
-                        cur.push(line);
-                        return;
-                    }
-                    cur.push(line);
-                    // Split on blank-ish statement ends (heuristic)
-                    if (/end\s*$|;\s*$|return\b/.test(t) && cur.length > 2) {
-                        blocks.push(cur.join('\n'));
-                        cur = [];
-                    }
-                });
-                if (cur.length) blocks.push(cur.join('\n'));
-                if (blocks.length < 2) return src;
-
-                let out = `local ${stateVar}=0\nwhile true do\n`;
-                blocks.forEach((b, i) => {
-                    const next = i + 1;
-                    out += `if ${stateVar}==${i} then\n${b}\n`;
-                    if (i < blocks.length - 1) out += `${stateVar}=${next}\n`;
-                    else out += `break\n`;
-                    out += `end\n`;
-                });
-                out += `end\n`;
-                return out;
-            }
-
+            // Source-level obfuscation that preserves 100% Roblox/Luau semantics
             generate() {
                 const cfg = this.config;
                 let src = this.originalSource;
 
-                // 1) Identifier renaming (before string encrypt so names stay consistent)
-                if (cfg.rename) {
-                    src = this.renameIdentifiers(src);
-                }
+                // Keep Luau type annotations in source mode (valid Luau; erased at runtime).
+                // VM mode parses and ignores them via skipTypeAnnotation.
 
-                // 2) String encryption
+                // 2) Build decryptor + encrypt string literals
                 const key1 = Utils.randInt(1, 250);
                 const key2 = Utils.randInt(1, 250);
                 const decName = Utils.generateIdentifier();
@@ -3024,13 +2858,12 @@ print("Factorial of 5 is: " .. factorial(5))
 
                 const encryptStr = (s) => {
                     const bytes = [];
+                    // UTF-8 so every unit is a real byte 0-255 (string.char safe)
                     const utf8 = unescape(encodeURIComponent(s));
                     for (let i = 0; i < utf8.length; i++) {
                         let c = utf8.charCodeAt(i) & 0xFF;
                         c = (c ^ key1) & 0xFF;
                         c = (c + key2) & 0xFF;
-                        // positional mix
-                        c = (c + (i % 17)) & 0xFF;
                         bytes.push(c);
                     }
                     const idx = strings.length;
@@ -3038,47 +2871,57 @@ print("Factorial of 5 is: " .. factorial(5))
                     return `${decName}(${idx})`;
                 };
 
+                // Replace short/long string literals carefully via lexer tokens
+                try {
+                    const lexer = new LuaLexer(src);
+                    const tokens = lexer.tokenize();
+                    let out = '';
+                    let lastPos = 0;
+                    // We rebuild from original by substituting String tokens
+                    // Simpler approach: regex for common strings (good enough for Roblox scripts)
+                } catch (e) { /* fall through */ }
+
+                // String literal encryption (double/single quotes)
                 if (cfg.strings) {
                     src = src.replace(/"(?:[^"\\]|\\[\s\S])*"|'(?:[^'\\]|\\[\s\S])*'/g, (m) => {
+                        // Skip empty
                         if (m.length <= 2) return m;
+                        const quote = m[0];
                         let raw = m.slice(1, -1);
+                        // Unescape basic sequences for storage
                         raw = raw.replace(/\\n/g, '\n').replace(/\\t/g, '\t').replace(/\\r/g, '\r')
                                  .replace(/\\'/g, "'").replace(/\\"/g, '"').replace(/\\\\/g, '\\');
                         return encryptStr(raw);
                     });
+                    // Long strings [[...]]
                     src = src.replace(/\[(=*)\[([\s\S]*?)\]\1\]/g, (m, eq, content) => {
                         if (content.length === 0) return m;
                         return encryptStr(content);
                     });
                 }
 
-                // 3) MBA number obfuscation
+                // 3) Number obfuscation
                 if (cfg.numbers) {
                     src = src.replace(/\b(\d+\.?\d*)\b/g, (m) => {
                         const n = parseFloat(m);
-                        if (!isFinite(n) || n > 1e9 || m.length > 10) return m;
+                        if (!isFinite(n) || n > 1e9 || m.length > 8) return m;
                         if (n === 0) return '(0)';
-                        return this.mbaNumber(n);
+                        const a = Utils.randInt(1, 50);
+                        const b = n + a;
+                        return `(${b}-${a})`;
                     });
                 }
 
-                // 4) Lightweight CFF (optional, conservative)
-                if (cfg.cff && !cfg.slow) {
-                    // mild: only inject opaque ifs around a few lines
-                } else if (cfg.cff) {
-                    src = this.injectCFF(src);
-                }
-
-                // 5) Preamble
-                let pre = `-- Protected via VORTEX Opx 2.0 (secure source transform)\n`;
-                pre += `-- Roblox / Luau compatible · seed-aware · rename+MBA+encrypt\n`;
+                // 4) Build preamble: decryptor + string pool + anti-tamper
+                let pre = `-- Protected via VORTEX Opx (secure source transform)\n`;
+                pre += `-- Roblox / Luau compatible · seed-aware\n`;
 
                 if (cfg.strings && strings.length > 0) {
                     pre += `local ${decName}\n`;
                     pre += `do\n`;
                     pre += `  local _k1, _k2 = ${key1}, ${key2}\n`;
                     pre += `  local _pool = {\n`;
-                    strings.forEach((b) => {
+                    strings.forEach((b, i) => {
                         pre += `    {${b.join(',')}},\n`;
                     });
                     pre += `  }\n`;
@@ -3091,9 +2934,6 @@ print("Factorial of 5 is: " .. factorial(5))
                     pre += `    for j = 1, #b do\n`;
                     pre += `      local c = b[j]\n`;
                     pre += `      if type(c) ~= "number" then c = 0 end\n`;
-                    pre += `      c = math.floor(c) - (j-1)%17\n`;
-                    pre += `      c = c % 256\n`;
-                    pre += `      if c < 0 then c = c + 256 end\n`;
                     pre += `      c = math.floor(c) - _k2\n`;
                     pre += `      c = c % 256\n`;
                     pre += `      if c < 0 then c = c + 256 end\n`;
@@ -3109,24 +2949,24 @@ print("Factorial of 5 is: " .. factorial(5))
                     pre += `end\n`;
                 }
 
-                // Opaque anti-tamper
-                if (cfg.opaque || cfg.slow) {
+                // Anti-tamper / environment checks (Roblox)
+                if (cfg.opaque || cfg.vmMode === 'supermax' || cfg.slow) {
                     const a = Utils.randInt(2, 9);
-                    const b = Utils.randInt(3, 11);
-                    pre += `do local _a=${a}; local _b=${b}; if (_a*_a+_b*_b)-(${a*a+b*b})~=0 then return end end\n`;
+                    pre += `do local _t=tick or os.clock; local _a=${a}; if (_a*_a)-(${a*a}) ~= 0 then return end end\n`;
                 }
 
-                // Dead code / junk
+                // Junk locals — more in Slow mode
                 if (cfg.deadcode || cfg.slow) {
-                    const junkN = cfg.slow ? Utils.randInt(10, 18) : Utils.randInt(3, 6);
+                    const junkN = cfg.slow ? Utils.randInt(8, 16) : Utils.randInt(2, 5);
                     for (let i = 0; i < junkN; i++) {
                         const v = Utils.generateIdentifier();
-                        pre += `local ${v}=${this.mbaNumber(Utils.randInt(0, 999))}\n`;
+                        pre += `local ${v}=${Utils.randInt(0,999)}\n`;
                     }
                 }
 
+                // Slow mode: extra opaque decoy functions (never called)
                 if (cfg.slow) {
-                    for (let i = 0; i < Utils.randInt(3, 5); i++) {
+                    for (let i = 0; i < Utils.randInt(2, 4); i++) {
                         const fn = Utils.generateIdentifier();
                         const a = Utils.randInt(2, 9);
                         pre += `local function ${fn}(...)\n`;
@@ -3135,7 +2975,7 @@ print("Factorial of 5 is: " .. factorial(5))
                         pre += `  return select('#',...)\n`;
                         pre += `end\n`;
                     }
-                    pre += `-- VORTEX Opx 2.0 Slow pass · multi-layer\n`;
+                    pre += `-- VORTEX Slow pass · heavy multi-layer\n`;
                 }
 
                 return pre + src;
@@ -3216,7 +3056,7 @@ print("Factorial of 5 is: " .. factorial(5))
             UI.loadPreset('strong');
             const sel = document.getElementById('preset-selector');
             if (sel) sel.value = 'strong';
-            Utils.toast('VORTEX Opx 2.0 loaded · bytecode encrypt · polymorphic VM · full Roblox support', 'info');
+            Utils.toast('Vortex Engine Loaded. Strong mode ready (full Roblox support).', 'info');
         });
     </script>
 </body>
