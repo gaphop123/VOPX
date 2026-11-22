@@ -2210,10 +2210,11 @@ print("Factorial of 5 is: " .. factorial(5))
 
                 this.pushBreakTarget();
                 const loopStart = this.instructions.length;
-                // condition: var <= limit (positive step assumed for simplicity)
+                // condition: step>0 ? var<=limit : var>=limit (handles negative/variable step)
                 this.emit(this.OP.PUSH_LOCAL, varSlot);
                 this.emit(this.OP.PUSH_LOCAL, limitSlot);
-                this.emit(this.OP.LTE);
+                this.emit(this.OP.PUSH_LOCAL, stepSlot);
+                this.emit(this.OP.FORPREP); // pops step, limit, var -> pushes bool "continue?"
                 const jmpf = this.emit(this.OP.JMPF, 0);
 
                 node.body.forEach(s => this.visit(s));
@@ -2316,6 +2317,12 @@ print("Factorial of 5 is: " .. factorial(5))
                 const savedScopes = this.scopes;
                 const savedBreakStack = this.breakStack;
                 const savedContinueStack = this.continueStack;
+                // labels/gotoPending are per-function: without saving these, a goto or label
+                // inside a nested function would read/write the enclosing function's (or a
+                // sibling function's) instruction array by coincidental index, corrupting
+                // unrelated jumps and leaving the nested function's own goto unpatched.
+                const savedLabels = this.labels;
+                const savedGotoPending = this.gotoPending;
 
                 // Make current scopes visible as outer for nested resolution
                 this.outerFuncScopes.push({
@@ -2328,6 +2335,8 @@ print("Factorial of 5 is: " .. factorial(5))
                 this.scopes = [new Map()];
                 this.breakStack = [];
                 this.continueStack = [];
+                this.labels = new Map();
+                this.gotoPending = [];
 
                 // For recursive local functions, reserve slot 0 for the function itself
                 let selfSlot = -1;
@@ -2344,6 +2353,14 @@ print("Factorial of 5 is: " .. factorial(5))
                 this.emit(this.OP.PUSH_CONST, this.addConstant(null));
                 this.emit(this.OP.RET, 0);
 
+                // Resolve this function's own goto/label pairs before its label table is discarded
+                this.gotoPending.forEach(({ idx, label }) => {
+                    if (!this.labels.has(label)) {
+                        throw new Error(`[InvalidJumpTarget] undefined label '${label}' (stage: encoder, function)`);
+                    }
+                    this.instructions[idx].arg = this.labels.get(label);
+                });
+
                 const proto = {
                     instructions: this.instructions,
                     constants: this.constants,
@@ -2359,6 +2376,8 @@ print("Factorial of 5 is: " .. factorial(5))
                 this.scopes = savedScopes;
                 this.breakStack = savedBreakStack;
                 this.continueStack = savedContinueStack;
+                this.labels = savedLabels;
+                this.gotoPending = savedGotoPending;
                 this.outerFuncScopes.pop();
 
                 this.emit(this.OP.CLOSURE, protoIndex);
@@ -2754,7 +2773,10 @@ print("Factorial of 5 is: " .. factorial(5))
             luaStringLiteral(s) {
                 // Produce a safe Lua long-string or escaped short string
                 if (s.indexOf('\0') === -1 && s.indexOf(']]') === -1) {
-                    return '[[' + s + ']]';
+                    // Lua silently strips a literal newline immediately after the opening [[.
+                    // Always inject one extra leading newline: Lua eats exactly that one,
+                    // so the original content (newline-leading or not) survives intact.
+                    return '[[\n' + s + ']]';
                 }
                 // fallback to byte table reconstruction later; for plain mode use escapes
                 let out = '"';
@@ -2765,7 +2787,10 @@ print("Factorial of 5 is: " .. factorial(5))
                     else if (c === 13) out += '\\r';
                     else if (c === 34) out += '\\"';
                     else if (c === 92) out += '\\\\';
-                    else if (c < 32 || c > 126) out += '\\' + c;
+                    // Zero-pad to 3 digits: an un-padded decimal escape like \5 followed by a
+                    // literal digit character (e.g. "3") is parsed by Lua as the single escape
+                    // \53, silently corrupting the string. \000-style padding is unambiguous.
+                    else if (c < 32 || c > 126) out += '\\' + String(c).padStart(3, '0');
                     else out += s[i];
                 }
                 return out + '"';
@@ -2824,6 +2849,10 @@ print("Factorial of 5 is: " .. factorial(5))
                         return `${S}[#${S}] = -${S}[#${S}]`;
                     case 'LEN':
                         return `${S}[#${S}] = #${S}[#${S}]`;
+                    case 'FORPREP':
+                        // Stack (top→bottom): step, limit, var. Pushes bool "should this iteration run?"
+                        // Handles positive, negative and zero step correctly (zero step errors, as real Lua does).
+                        return `local st=table.remove(${S}) local lim=table.remove(${S}) local v=table.remove(${S}) if st==0 then error("'for' step is zero",0) end ${S}[#${S}+1]=(st>0 and v<=lim) or (st<0 and v>=lim)`;
                     case 'JMP':
                         return `${IP} = ${A} * 2 + 1`;
                     case 'JMPF':
